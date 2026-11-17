@@ -1,0 +1,35 @@
+# Build output, live data and machine-local state.
+#
+# The gateway writes OpenTimestamps proofs, evidence packages and manifests into
+# `psemp-gateway/data/`. That directory holds material produced by a real mailbox
+# on a real machine — it is output, not source, and must never be committed.
+/psemp-gateway/data/
+
+# Reports, logs, scratch files.
+/reports/
+*.log
+*.err
+*.tmp
+
+# Node (the repository intentionally has no runtime dependencies, so this only
+# matters if someone runs a tool locally).
+node_modules/
+npm-debug.log*
+
+# Built add-on archives. Release archives are attached to GitHub Releases, not
+# committed: a committed .xpi is a stale copy waiting to be installed by mistake.
+*.xpi
+/dist/
+
+# Editor and OS noise.
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# Thunderbird profile artefacts copied out for debugging.
+*.msf
+prefs.js.backup*
+user.js.psemp-before-install

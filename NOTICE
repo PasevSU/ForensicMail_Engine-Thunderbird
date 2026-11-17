@@ -1,0 +1,80 @@
+PasevSU Forensic Mail Engine — Thunderbird
+Copyright 2026 PasevSU
+
+This product includes software developed by PasevSU and software
+developed by third parties. The Apache License 2.0 in LICENSE applies to
+the first-party code only. Vendored components listed below remain under
+their own licenses and are NOT relicensed by it.
+
+=====================================================================
+First-party code — Apache License 2.0
+=====================================================================
+
+  thunderbird-extension/                 the MailExtension
+  psemp-gateway/*.js                     api.js, cli.js and tools
+  psemp-gateway/PROTOCOL.md              the PSEMP specification
+  psemp-gateway/settings.default.json
+  psemp-gateway/examples/
+  psemp-gateway/test/
+  tools/                                 repository self-check
+  docs/
+
+=====================================================================
+Vendored third-party components — separate licenses
+=====================================================================
+
+1. OpenPGP.js
+   Path     psemp-gateway/packages/15-openpgpjs/
+   Package  openpgp 6.3.1
+   License  GNU Lesser General Public License v3.0 or later
+   Text     psemp-gateway/packages/15-openpgpjs/LICENSE
+   Home     https://www.openpgp.org/
+
+   Used for OpenPGP message verification, detached-signature checking
+   and key/fingerprint handling. Distributed unmodified. The complete
+   LGPL text ships with the code, as LGPL-3.0 §4 requires.
+
+2. OpenTimestamps client
+   Path     psemp-gateway/packages/17-javascript-opentimestamps/
+   Package  opentimestamps 0.4.9
+   License  GNU Lesser General Public License v3.0
+   Text     psemp-gateway/packages/17-javascript-opentimestamps/LICENSE
+   Home     https://opentimestamps.org/
+
+   Used to build, upgrade and verify .ots proofs against Bitcoin block
+   headers. Distributed unmodified, with the complete LGPL text.
+
+3. Attribution carried inside the vendored trees
+
+   psemp-gateway/packages/**/mode-ctr-gladman.js
+     Contains code copyright Jan Hruby, distributed under the same
+     LGPL-3.0 terms as the OpenPGP.js package that includes it.
+
+   The directories 01-core, 06-hash-crypto, crypto, cipher, cipherMode,
+   core, elliptic, email, encoding, functions, hash, kem, key, packet,
+   post_quantum, public_key, s2k, schema, signature, src, ts and type
+   inside those two package trees are sub-libraries of OpenPGP.js and of
+   the OpenTimestamps client. They are not separate works and are not
+   separately licensed.
+
+=====================================================================
+First-party packages carrying no license field
+=====================================================================
+
+Two vendored packages were written by PasevSU and declare no `license`
+field in their package.json. They are first-party code and fall under
+the Apache License 2.0 of this repository:
+
+  psemp-gateway/packages/05-forensics/email-evidence-js-core/
+    evidence-object-email-core 0.1.0-dev
+
+  psemp-gateway/packages/07-ots/
+    pasevsu-ots (no version declared)
+
+=====================================================================
+No warranty
+=====================================================================
+
+Unless required by applicable law or agreed to in writing, all software
+is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
+ANY KIND, either express or implied. See LICENSE for the exact terms.

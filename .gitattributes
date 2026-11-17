@@ -1,0 +1,28 @@
+# Everything in this repository is LF, everywhere, forever.
+#
+# The Thunderbird add-on and the gateway are read by tools that compare exact
+# strings (header names, preference names, JSON keys) and by a test suite that
+# rejects CRLF in any text file. A single CRLF on a Windows checkout therefore
+# turns into a red check, so the normalisation is declared here instead of being
+# left to each contributor's editor.
+* text=auto eol=lf
+
+# Binary payloads that must never be rewritten.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.xpi binary
+*.ots binary
+
+# OpenTimestamps proofs are line-oriented hex; they are text.
+*.ots.txt text eol=lf
+
+# Git's own files.
+.gitattributes text eol=lf
+.gitignore text eol=lf
+
+# PowerShell is consumed by Windows, but it parses LF fine and the tree is
+# validated as LF-only, so it stays text.
+*.ps1 text eol=lf

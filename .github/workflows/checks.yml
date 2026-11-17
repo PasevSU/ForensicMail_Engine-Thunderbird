@@ -1,0 +1,183 @@
+name: checks
+
+# There is no build here. The add-on is loaded by Thunderbird straight from
+# source and the gateway runs on plain Node with vendored dependencies, so what
+# can break is CONSISTENCY — a version that drifts, a header registered in one
+# place and forgotten in another, a CRLF, a `require()` smuggled into code that
+# runs inside a MailExtension sandbox where `require` does not exist.
+#
+# `tools/check-repo.cjs` covers the static side; `psemp-gateway/test/all.cjs`
+# covers the behavioural side (parity between the two engines, the header
+# contract, OTS sealing, replay defence).
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  consistency:
+    name: consistency (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # Kept separate from `npm run check` so a syntax error names the file
+      # instead of surfacing as one failed assertion inside a larger check.
+      #
+      # `packages/07-ots/schema.js` is pruned because it is not JavaScript: it
+      # is the JSON Schema draft-07 meta-schema, vendored upstream with a .js
+      # extension, and nothing in the tree requires it. It is parsed as JSON in
+      # the step below instead, so the skip costs no coverage.
+      - name: Syntax-check every JavaScript file
+        run: |
+          set -euo pipefail
+          count=0
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+            count=$((count + 1))
+          done < <(find . -path ./node_modules -prune -o \
+                        -path ./.git -prune -o \
+                        -path ./psemp-gateway/packages/07-ots/schema.js -prune -o \
+                        -type f \( -name '*.js' -o -name '*.cjs' \) -print0)
+          echo "syntax ok: $count files"
+
+      - name: The JSON Schema carrying a .js name is still valid JSON
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "psemp-gateway/packages/07-ots/schema.js";
+            const s = JSON.parse(fs.readFileSync(p, "utf8"));
+            if (!s.$schema) { console.error(`${p} is no longer a JSON Schema`); process.exit(1); }
+            console.log(`schema ok: ${s.title} (${Object.keys(s.definitions || {}).length} definitions)`);
+          '
+
+      - name: Repository self-check
+        run: npm run check
+
+      - name: Engine parity self-test
+        run: npm run selftest
+
+      # The suite that talks to public OpenTimestamps calendars is the slowest
+      # (~15 s); the whole set is under 20 s on a runner.
+      - name: PSEMP suites
+        run: npm run suites
+
+  manifest:
+    name: add-on manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Thunderbird refuses the whole add-on if the manifest cannot be parsed or
+      # if the `__MSG_*__` placeholders cannot be resolved, and it does so by
+      # DELETING the side-loaded .xpi rather than reporting an error. Both are
+      # cheap to check here.
+      - name: Manifest parses and declares what Thunderbird needs
+        run: |
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync("thunderbird-extension/manifest.json", "utf8"));
+            const need = [];
+            if (m.manifest_version !== 2) need.push("manifest_version must be 2 (MV3 is not supported by Thunderbird MailExtensions)");
+            if (!m.browser_specific_settings?.gecko?.id) need.push("browser_specific_settings.gecko.id is required");
+            if (m.browser_specific_settings?.gecko?.strict_min_version !== "115.0") need.push("strict_min_version must be 115.0 (ESR floor)");
+            for (const p of ["compose", "storage"]) {
+              if (!(m.permissions || []).includes(p)) need.push(`missing permission: ${p}`);
+            }
+            if (!(m.background?.scripts || []).includes("background.js")) need.push("background.scripts must include background.js");
+            if (m.options_ui?.page !== "options.html") need.push("options_ui.page must be options.html");
+            if (m.default_locale) {
+              const p = `thunderbird-extension/_locales/${m.default_locale}/messages.json`;
+              if (!fs.existsSync(p)) need.push(`default_locale ${m.default_locale} has no ${p}`);
+            }
+            if (need.length) { console.error(need.join("\n")); process.exit(1); }
+            console.log(`manifest ok: ${m.name} ${m.version}`);
+          '
+
+      # A placeholder with no message behind it is not a warning in Thunderbird;
+      # it is a rejected manifest.
+      - name: Every __MSG_*__ placeholder resolves
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const root = "thunderbird-extension";
+            const m = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
+            const text = fs.readFileSync(path.join(root, "manifest.json"), "utf8");
+            const used = new Set([...text.matchAll(/__MSG_([A-Za-z0-9_@]+)__/g)].map((x) => x[1]));
+            const locales = fs.readdirSync(path.join(root, "_locales"));
+            let bad = 0;
+            for (const loc of locales) {
+              const msgs = JSON.parse(fs.readFileSync(path.join(root, "_locales", loc, "messages.json"), "utf8"));
+              for (const key of used) {
+                if (!msgs[key]) { console.error(`${loc}: missing message "${key}"`); bad += 1; }
+              }
+            }
+            if (bad) process.exit(1);
+            console.log(`locales ok: ${locales.join(", ")} — ${used.size} placeholders`);
+          '
+
+  docs:
+    name: documentation links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # A relative link to a file that does not exist is the documentation
+      # equivalent of a header that is computed and then dropped: it looks
+      # complete and leads nowhere.
+      - name: Relative links resolve
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const bad = [];
+            const files = [];
+            (function walk(dir) {
+              for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                if (e.isDirectory()) {
+                  if ([".git", "node_modules", "data", "packages"].includes(e.name)) continue;
+                  walk(path.join(dir, e.name));
+                } else if (e.name.endsWith(".md")) files.push(path.join(dir, e.name));
+              }
+            })(".");
+            for (const file of files) {
+              const text = fs.readFileSync(file, "utf8");
+              for (const m of text.matchAll(/\]\(([^)\s]+)\)/g)) {
+                const target = m[1];
+                if (/^(https?:|mailto:|#)/.test(target)) continue;
+                const clean = target.split("#")[0];
+                if (!clean) continue;
+                if (!fs.existsSync(path.resolve(path.dirname(file), clean))) {
+                  bad.push(`${file}: ${target}`);
+                }
+              }
+            }
+            if (bad.length) { console.error(bad.join("\n")); process.exit(1); }
+            console.log(`links ok: ${files.length} markdown files`);
+          '

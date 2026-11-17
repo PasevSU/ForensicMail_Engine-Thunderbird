@@ -1,0 +1,24 @@
+{
+  "name": "forensicmail-engine-thunderbird",
+  "version": "1.9.0",
+  "private": true,
+  "description": "Forensic and cryptographic headers on every outgoing Thunderbird message, plus the CLI that anchors, signs and verifies the evidence afterwards.",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node tools/check-repo.cjs",
+    "selftest": "node psemp-gateway/cli.js self-test",
+    "suites": "node psemp-gateway/test/all.cjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PasevSU/ForensicMail_Engine-Thunderbird.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PasevSU/ForensicMail_Engine-Thunderbird/issues"
+  },
+  "homepage": "https://github.com/PasevSU/ForensicMail_Engine-Thunderbird#readme"
+}
