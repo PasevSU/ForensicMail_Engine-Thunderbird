@@ -1,0 +1,58 @@
+# How to cite this work.
+#
+# A forensic tool is cited in reports that outlive the tool, so the fields below
+# are the ones a reader of such a report would need to find the exact version that
+# produced the artefact. `version` tracks the add-on manifest; when it changes, the
+# behaviour of at least one header has changed, which is why it is here and not
+# only in the release tag.
+
+cff-version: 1.2.0
+message: "If this work supports a report, exhibit or finding, cite the version that produced the artefact — not merely the project name."
+title: "PasevSU Forensic Mail Engine — Thunderbird"
+abstract: >-
+  A Thunderbird MailExtension that attaches cryptographic evidence headers to every
+  outgoing message without a per-message opt-in: a SHA-256 digest of the body, a
+  digest per attachment, a Merkle root over all of them, and identifiers that bind
+  the message to an evidence sequence. A companion gateway (Python-free, dependency-free
+  Node) verifies what those headers claim, produces OpenTimestamps proofs, checks
+  OpenPGP signatures over the message as sent, and reports arrival receipts.
+version: 1.9.0
+date-released: 2026-11-16
+license: Apache-2.0
+license-url: https://github.com/PasevSU/ForensicMail_Engine-Thunderbird/blob/main/LICENSE
+repository-code: https://github.com/PasevSU/ForensicMail_Engine-Thunderbird
+url: https://github.com/PasevSU/ForensicMail_Engine-Thunderbird
+keywords:
+  - digital forensics
+  - email evidence
+  - chain of custody
+  - Thunderbird
+  - MailExtension
+  - SHA-256
+  - Merkle tree
+  - OpenTimestamps
+  - OpenPGP
+  - evidence integrity
+authors:
+  - name: "PasevSU"
+    alias: "PasevSU"
+    email: "pasevdenislav@gmail.com"
+    website: "https://github.com/PasevSU"
+
+# The vendored libraries are other people's work and are not covered by a citation
+# of this project. When citing what verified a timestamp, cite them directly:
+#   openpgp.js 6.3.1        LGPL-3.0+  https://github.com/openpgpjs/openpgpjs
+#   javascript-opentimestamps 0.4.9   LGPL-3.0  https://github.com/opentimestamps/javascript-opentimestamps
+references:
+  - type: software
+    title: "openpgpjs"
+    version: 6.3.1
+    license: LGPL-3.0
+    repository: https://github.com/openpgpjs/openpgpjs
+    notes: "Vendored at psemp-gateway/packages/15-openpgpjs; its licence travels with it."
+  - type: software
+    title: "javascript-opentimestamps"
+    version: 0.4.9
+    license: LGPL-3.0
+    repository: https://github.com/opentimestamps/javascript-opentimestamps
+    notes: "Vendored at psemp-gateway/packages/17-javascript-opentimestamps; its licence travels with it."

@@ -44,7 +44,7 @@ const SKIP_DIRS = new Set(['.git', 'node_modules', 'data', 'reports']);
 /** Extensions whose bytes are text and must therefore be LF-only. */
 const TEXT_EXT = new Set([
   '.js', '.cjs', '.mjs', '.json', '.md', '.txt', '.html', '.htm', '.css',
-  '.yml', '.yaml', '.ps1', '.sh', '.ots', '.asc', '.eml'
+  '.yml', '.yaml', '.ps1', '.sh', '.ots', '.asc', '.eml', '.cff'
 ]);
 const TEXT_NAMES = new Set(['.gitignore', '.gitattributes', '.editorconfig']);
 

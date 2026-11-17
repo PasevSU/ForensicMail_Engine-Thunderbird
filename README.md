@@ -93,6 +93,22 @@ The companion `Disposition-Notification-To` field is written by Thunderbird itse
 
 ## Install in five minutes
 
+### 0. Or take the built artifact
+
+The current `.xpi` is attached to
+[**Releases**](https://github.com/PasevSU/ForensicMail_Engine-Thunderbird/releases/latest)
+with its SHA-256 in the release notes, so you can confirm the file you downloaded
+without trusting the download. Check it before installing:
+
+```powershell
+certutil -hashfile pasevsu-forensic-headers@pasev.example-1.9.xpi SHA256
+```
+
+It is **unsigned**, and Thunderbird refuses unsigned add-ons by default. Installing
+it permanently therefore still needs the preferences that step 2 applies — which is
+why the installer remains the supported route. The artifact is there so you can
+compare it against your own build and know when they differ.
+
 ### 1. The add-on, temporarily (works right now)
 
 1. Thunderbird → **☰ → Add-ons and Themes** → gear icon → **Debug Add-ons**.
@@ -180,6 +196,7 @@ docs/                         CLI reference, verification walkthrough, threat mo
 | [`psemp-gateway/PROTOCOL.md`](psemp-gateway/PROTOCOL.md) | the normative specification (PSEMP 1.1) |
 | [`thunderbird-extension/README.md`](thunderbird-extension/README.md) | the add-on, on its own |
 | [`SECURITY.md`](SECURITY.md) · [`PRIVACY.md`](PRIVACY.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`CHANGELOG.md`](CHANGELOG.md) | policy, data handling, how to help, what changed |
+| [`CITATION.cff`](CITATION.cff) · [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) · [`THIRD_PARTY.md`](THIRD_PARTY.md) · [`NOTICE`](NOTICE) | how to cite the version that produced an artefact, conduct, and the licence position |
 
 ---
 
