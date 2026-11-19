@@ -112,7 +112,10 @@
     "message": "Mark every message for OpenTimestamps (<code>X-PasevSU-OTS: pending</code>)"
   },
   "labelReceipt": {
-    "message": "Request a delivery receipt on every message (Thunderbird adds <code>Disposition-Notification-To</code>)"
+    "message": "Request a read receipt on every message (Thunderbird adds <code>Disposition-Notification-To</code>)"
+  },
+  "labelDeliveryReceipt": {
+    "message": "Request a delivery receipt on every message (Thunderbird adds the DSN fields, <code>RFC 3461</code>)"
   },
   "labelReceiptAddress": {
     "message": "Fallback receipt address"
@@ -170,6 +173,6 @@
     "message": "Real OpenPGP signatures (<code>.asc</code>) and OpenTimestamps (<code>.ots</code>) cannot be produced inside a Thunderbird MailExtension; the <code>X-PasevSU-OTS</code> header is a marker for the SMTP gateway. Run <code>node psemp-gateway/cli.js seal PasevSU_Manifest.json</code> to turn the marker into a real detached signature and proof. The marker is written by default so no message is ever sent unstamped — untick the box only if you deliberately do not want the gateway to seal."
   },
   "receiptNote": {
-    "message": "The receipt request is standard MDN (RFC 8098): the recipient is <em>asked</em>, not obliged, and most clients show a dialog. Thunderbird's own <em>Return Receipts</em> setting in Account Settings asks as well; both may appear, which is harmless. The address is the identity the message is sent from."
+    "message": "Two different requests. The read receipt is standard MDN (RFC 8098): the recipient is <em>asked</em>, not obliged, and most clients show a dialog — Thunderbird's own <em>Return Receipts</em> setting in Account Settings asks as well, and both may appear, which is harmless. The delivery receipt is standard DSN (RFC 3461): the receiving server reports delivery or failure and the recipient is never asked. Both go to the address the message is sent from."
   }
 }

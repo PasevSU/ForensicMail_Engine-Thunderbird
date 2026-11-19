@@ -65,11 +65,14 @@ const DEFAULTS = Object.freeze({
   // On by default so the marker is written without any per-message decision; the
   // extension's options page can turn it off and that stored value wins.
   enableOts: true,
-  // Delivery receipt (MDN, RFC 8098). On by default for the same reason: asking for
-  // a receipt is the standard behaviour, not a per-message choice. The gateway uses
-  // the same switch and falls back to `receiptAddress` when the message carries no
-  // `From` it can answer to.
+  // Read receipt (MDN, RFC 8098). On by default for the same reason: asking for a
+  // receipt is the standard behaviour, not a per-message choice. The recipient's
+  // client answers it, so the address must be one the message can be replied to;
+  // `receiptAddress` is the fallback for a message with no usable `From`.
   enableReceipt: true,
+  // Delivery receipt (DSN, RFC 3461). The receiving server answers this one, the
+  // recipient is never asked, so it is a separate request and a separate switch.
+  enableDeliveryReceipt: true,
   receiptAddress: '',
 });
 
@@ -80,9 +83,10 @@ let settingsCache = null;
 /**
  * Shared defaults, read from `settings.default.json` beside this file.
  *
- * The same six keys are mirrored in the Thunderbird extension, so keeping them in a
- * data file lets the two halves be diffed instead of hand-synchronised. A missing or
- * malformed file falls back to `DEFAULTS` — settings must never fail a send.
+ * The same keys are mirrored in the Thunderbird extension (one for one, in the same
+ * order, `origin` excepted), so keeping them in a data file lets the two halves be
+ * diffed instead of hand-synchronised. A missing or malformed file falls back to
+ * `DEFAULTS` — settings must never fail a send.
  * @param {string} [file] override, mainly for tests
  */
 function loadSettings(file = SETTINGS_PATH) {

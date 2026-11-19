@@ -2,7 +2,7 @@
 /*
  * PSEMP shared-settings parity.
  *
- * The two halves of the framework must describe the same eight settings or the user
+ * The two halves of the framework must describe the same ten settings or the user
  * ends up with a header claiming a framework the other half never wrote. The file
  * `psemp-gateway/settings.default.json` is the meeting point, so this test pins the
  * key set and the key ORDER across four places at once:
@@ -12,7 +12,7 @@
  *   thunderbird-extension/background.js DEFAULTS (what is actually written)
  *   thunderbird-extension/options.js    DEFAULTS (what the options page edits)
  *
- * Importing a settings file must copy the eight keys but NOT `origin`: origin names
+ * Importing a settings file must copy the nine shared keys but NOT `origin`: origin names
  * the producer, so the extension always writes `Thunderbird` and the gateway always
  * writes `PSEMP-Gateway`. That single divergence is asserted, not ignored.
  *
@@ -38,6 +38,7 @@ const KEYS = [
   'pgpFingerprint',
   'enableOts',
   'enableReceipt',
+  'enableDeliveryReceipt',
   'receiptAddress',
 ];
 
@@ -202,19 +203,26 @@ async function main() {
     assert.strictEqual(page.element('version').value, api.DEFAULTS.version);
     assert.strictEqual(page.element('enableOts').checked, api.DEFAULTS.enableOts);
     assert.strictEqual(page.element('enableReceipt').checked, api.DEFAULTS.enableReceipt);
+    assert.strictEqual(
+      page.element('enableDeliveryReceipt').checked,
+      api.DEFAULTS.enableDeliveryReceipt,
+      'the delivery-receipt switch is on the page and reflects storage',
+    );
     assert.strictEqual(page.element('receiptAddress').value, api.DEFAULTS.receiptAddress);
     return 'form reflects storage';
   });
 
-  await check('import-copies-the-eight-keys-but-not-origin', async () => {
+  await check('import-copies-the-nine-keys-but-not-origin', async () => {
     const imported = {
       version: '2.5',
       framework: 'Forensic-Mail',
       origin: 'PSEMP-Gateway',
       organization: 'PasevSU',
+      caseId: 'CASE-2026-001',
       pgpFingerprint: 'a1b2 c3d4: e5f6',
       enableOts: false,
       enableReceipt: false,
+      enableDeliveryReceipt: false,
       receiptAddress: '  receipts@example.org  ',
     };
     page.element('importFile').files = [{ text: async () => JSON.stringify(imported) }];
@@ -227,6 +235,12 @@ async function main() {
     assert.strictEqual(written.pgpFingerprint, 'A1B2C3D4E5F6', 'the fingerprint is normalized on import');
     assert.strictEqual(written.enableOts, false);
     assert.strictEqual(written.enableReceipt, false, 'the receipt switch travels with the settings file');
+    assert.strictEqual(
+      written.enableDeliveryReceipt,
+      false,
+      'the delivery-receipt switch travels with the settings file',
+    );
+    assert.strictEqual(written.caseId, 'CASE-2026-001', 'caseId used to be dropped on import');
     assert.strictEqual(written.receiptAddress, 'receipts@example.org', 'the address is trimmed');
     assert.strictEqual(page.element('version').value, '2.5', 'the form is refreshed after import');
     return 'origin stripped, fingerprint normalized';

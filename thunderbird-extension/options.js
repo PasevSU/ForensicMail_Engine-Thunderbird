@@ -12,6 +12,7 @@ const DEFAULTS = {
   pgpFingerprint: "",
   enableOts: true,
   enableReceipt: true,
+  enableDeliveryReceipt: true,
   receiptAddress: "",
 };
 
@@ -24,6 +25,7 @@ const FIELDS = {
   pgpFingerprint: document.getElementById("pgpFingerprint"),
   enableOts: document.getElementById("enableOts"),
   enableReceipt: document.getElementById("enableReceipt"),
+  enableDeliveryReceipt: document.getElementById("enableDeliveryReceipt"),
   receiptAddress: document.getElementById("receiptAddress"),
 };
 
@@ -150,6 +152,7 @@ async function load() {
   FIELDS.pgpFingerprint.value = config.pgpFingerprint;
   FIELDS.enableOts.checked = Boolean(config.enableOts);
   FIELDS.enableReceipt.checked = Boolean(config.enableReceipt);
+  FIELDS.enableDeliveryReceipt.checked = Boolean(config.enableDeliveryReceipt);
   FIELDS.receiptAddress.value = config.receiptAddress;
   await renderArmed();
 }
@@ -259,6 +262,7 @@ async function save() {
     pgpFingerprint: normalizeFingerprint(typedFingerprint),
     enableOts: FIELDS.enableOts.checked,
     enableReceipt: FIELDS.enableReceipt.checked,
+    enableDeliveryReceipt: FIELDS.enableDeliveryReceipt.checked,
     receiptAddress: FIELDS.receiptAddress.value.trim(),
     // A fingerprint just accepted clears the complaint background.js recorded for the
     // previous one, so the page stops reporting a defect the user has already fixed.
@@ -288,10 +292,17 @@ function normalizeSettings(raw) {
   if (source.organization != null) {
     next.organization = String(source.organization).trim() || DEFAULTS.organization;
   }
+  // `caseId` used to be dropped here: the field exists in the page and in every
+  // DEFAULTS block, but an imported settings file silently lost its value.
+  if (source.caseId != null) next.caseId = String(source.caseId).trim();
   if (source.pgpFingerprint != null) next.pgpFingerprint = normalizeFingerprint(source.pgpFingerprint);
   if (source.enableOts != null) next.enableOts = source.enableOts === true || source.enableOts === "true";
   if (source.enableReceipt != null) {
     next.enableReceipt = source.enableReceipt === true || source.enableReceipt === "true";
+  }
+  if (source.enableDeliveryReceipt != null) {
+    next.enableDeliveryReceipt =
+      source.enableDeliveryReceipt === true || source.enableDeliveryReceipt === "true";
   }
   if (source.receiptAddress != null) next.receiptAddress = String(source.receiptAddress).trim();
   return next;
@@ -330,6 +341,7 @@ async function exportSettings() {
       pgpFingerprint: config.pgpFingerprint,
       enableOts: config.enableOts,
       enableReceipt: config.enableReceipt,
+      enableDeliveryReceipt: config.enableDeliveryReceipt,
       receiptAddress: config.receiptAddress,
     },
     null,

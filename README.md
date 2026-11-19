@@ -163,7 +163,8 @@ These are platform limits of MailExtensions (Thunderbird 115), not missing featu
 thunderbird-extension/        the MailExtension (loaded by Thunderbird, no build step)
   manifest.json               MV2, id pasevsu-forensic-headers@pasev.example, min TB 115.0
   background.js               compose.onBeforeSend -> digests -> Merkle root -> headers
-  options.html / options.js   settings: version, caseId, pgpFingerprint, enableOts, enableReceipt
+  options.html / options.js   settings: version, caseId, pgpFingerprint, enableOts,
+                              enableReceipt (MDN), enableDeliveryReceipt (DSN), receiptAddress
   user.js                     the 27 names, for mail.compose.other.header
   _locales/{en,bg,de}/        UI strings
   tools/install.ps1           build .xpi + install + register names (Windows)

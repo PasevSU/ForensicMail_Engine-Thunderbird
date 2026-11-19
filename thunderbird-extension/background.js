@@ -49,11 +49,15 @@ const DEFAULTS = {
   // On by default: every message is marked for the gateway so nothing has to be
   // remembered per message. Untick it in the options page to stop marking.
   enableOts: true,
-  // Delivery receipt (MDN). On by default for the same reason — a receipt is asked
-  // for on every message instead of per message. The address is the identity the
-  // message is sent from; `receiptAddress` is only the fallback for when
+  // Read receipt (MDN, RFC 8098). On by default for the same reason — a receipt is
+  // asked for on every message instead of per message. The address is the identity
+  // the message is sent from; `receiptAddress` is only the fallback for when
   // Thunderbird does not fill `details.from`.
   enableReceipt: true,
+  // Delivery receipt (DSN, RFC 3461). A different request from the read receipt:
+  // the *server* reports delivery or failure, the recipient is never asked. Both
+  // are switched on independently so either one can be turned off on its own.
+  enableDeliveryReceipt: true,
   receiptAddress: "",
 };
 
@@ -795,9 +799,11 @@ function addressOf(value) {
 }
 
 /*
- * Where a delivery receipt should go: the identity the message is actually sent
- * from wins, because that is the mailbox the recipient's client will answer. The
- * configured `receiptAddress` is the fallback for a snapshot that has no `from`.
+ * Where both receipt requests point: the identity the message is actually sent
+ * from wins, because that is the mailbox the recipient's client and the receiving
+ * server will answer. The configured `receiptAddress` is the fallback for a
+ * snapshot that has no `from`. The same address is reused for the read receipt
+ * (MDN, RFC 8098) and the delivery receipt (DSN, RFC 3461).
  */
 function resolveReceiptAddress(config, details) {
   return addressOf(details.from) || addressOf(config.receiptAddress);
@@ -879,10 +885,12 @@ async function buildHeaders(config, evidenceId, bodyHash, attachmentEntries, mer
     headers.push(buildHeader("X-PasevSU-OTS", "pending"));
   }
   if (config.enableReceipt && context.receiptTo) {
-    // Our marker only. The actual request is the standard `Disposition-Notification-To`
-    // field, and Thunderbird writes it itself when ComposeDetails.returnReceipt is true
-    // (see handleBeforeSend). It cannot be written through customHeaders: the name is
-    // rejected by the platform and the message would never be sent at all.
+    // Our marker only. The actual requests are Thunderbird's own standard fields:
+    // `Disposition-Notification-To` for the read receipt (MDN, RFC 8098) and the DSN
+    // request fields for the delivery receipt (RFC 3461). Thunderbird writes both
+    // itself when ComposeDetails.returnReceipt / .deliveryStatusNotification are true
+    // (see handleBeforeSend). Neither can be written through customHeaders: those
+    // names are rejected by the platform and the message would never be sent at all.
     headers.push(buildHeader("X-PasevSU-Receipt", "requested"));
   }
 
@@ -1190,12 +1198,18 @@ async function handleBeforeSend(tab, details) {
       console.error("[PasevSU] manifest could not be attached:", err);
     }
 
-    // Where the delivery receipt goes. `enableReceipt` is on by default, so the only
-    // thing that can suppress the header is a message with no resolvable address.
-    // The stored value is a CODE ("no-address"), not a sentence: the options page
-    // owns the words and can show them in the user's language.
-    const receiptTo = config.enableReceipt ? resolveReceiptAddress(config, details) : "";
-    const receiptProblem = config.enableReceipt && !receiptTo ? "no-address" : null;
+    // Where the receipts go. Both requests are on by default and independent: the
+    // read receipt (MDN) asks the recipient, the delivery receipt (DSN) asks the
+    // receiving server, so switching one off must not take the other with it. The
+    // stored value is a CODE ("no-address"), not a sentence: the options page owns
+    // the words and can show them in the user's language.
+    const receiptAddress = resolveReceiptAddress(config, details);
+    const receiptTo = config.enableReceipt ? receiptAddress : "";
+    const deliveryTo = config.enableDeliveryReceipt ? receiptAddress : "";
+    const receiptProblem =
+      (config.enableReceipt || config.enableDeliveryReceipt) && !receiptAddress
+        ? "no-address"
+        : null;
     await Promise.resolve()
       .then(() => browser.storage.local.set({ psempReceiptError: receiptProblem }))
       .catch(() => {});
@@ -1236,7 +1250,7 @@ async function handleBeforeSend(tab, details) {
             // went into the evidence chain without opening a mailbox.
             attachments: attachmentEntries,
             attachmentFailures,
-            receiptTo: receiptTo || null,
+            receiptTo: receiptTo || deliveryTo || null,
             // Names only: the values are already in the message being sent.
             headers: newHeaders.map((header) => header.name),
           },
@@ -1267,6 +1281,13 @@ async function handleBeforeSend(tab, details) {
       // `Disposition-Notification-To` field to the outgoing message itself. It cannot be
       // set through customHeaders — that name is rejected and the send never happens.
       changed.returnReceipt = true;
+    }
+    if (deliveryTo) {
+      // Native RFC 3461 request: `ComposeDetails.deliveryStatusNotification` makes
+      // Thunderbird add its own DSN request fields, exactly like the MDN above. Without
+      // this line no delivery receipt is ever requested — the option existed nowhere,
+      // which is why only the read receipt ever left the client.
+      changed.deliveryStatusNotification = true;
     }
     if (warBody !== null) {
       changed[warField] = warBody;

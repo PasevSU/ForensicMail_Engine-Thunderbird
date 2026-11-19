@@ -175,7 +175,7 @@ Example values below are real output from
 | 14 | `X-PasevSU-Merkle-Root` | `95a9269a…abd9ea2` | always |
 | 15 | `X-PasevSU-PGP-Fingerprint` | `A1B2…5678` | when configured |
 | 16 | `X-PasevSU-OTS` | `pending` | only when `enableOts` |
-| 17 | `X-PasevSU-Receipt` | `requested` | only when `enableReceipt` |
+| 17 | `X-PasevSU-Receipt` | `requested` | when `enableReceipt` or `enableDeliveryReceipt` |
 | 18 | `X-PasevSU-Message-ID` | `<PasevSU.20261116140000.ev-…@forensic.evidence.pasevsu>` | always |
 | 19 | `X-PasevSU-Sha256` | `body - 4121…,report.pdf - 4de6…,stmt.txt - 0661…,timestep - 2026-11-16T14:00:00.000Z` | always |
 | 20 | `X-PasevSU-Cripto-Engine` | `9572595485317120971519535` | always |
@@ -189,6 +189,7 @@ Example values below are real output from
 | — | `Message-ID` | same value as #18 | gateway only (§3.1) |
 | — | `PasevSU-WAR` | same value as #6 | gateway only (§4a) |
 | — | `Disposition-Notification-To` | the receipt address | only when `enableReceipt` — written by **Thunderbird**, via `returnReceipt`, never by the extension |
+| — | DSN request fields (RFC 3461) | the receipt address | only when `enableDeliveryReceipt` — also written by **Thunderbird**, via `deliveryStatusNotification` |
 
 Rules that fall out of the table:
 

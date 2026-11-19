@@ -63,7 +63,7 @@ Dynamic (computed per message):
 | `X-PasevSU-Merkle-Root` | hex Merkle root over body + attachment hashes (always) |
 | `X-PasevSU-PGP-Fingerprint` | `pgpFingerprint` option (omitted if empty) |
 | `X-PasevSU-OTS` | `pending` marker — **on by default**; untick `enableOts` to stop marking |
-| `X-PasevSU-Receipt` | `requested` — only when `enableReceipt` is on |
+| `X-PasevSU-Receipt` | `requested` — when `enableReceipt` (read receipt) **or** `enableDeliveryReceipt` (delivery receipt) is on |
 | `X-PasevSU-Message-ID` | long `<…@forensic.evidence.pasevsu>` Message-ID (always) |
 | `X-PasevSU-Sha256` | the readable digest block: `body - …`, one `name - …` per file, `timestep - …` |
 | `X-PasevSU-Cripto-Engine` | 25-digit code derived from the seal |
@@ -542,26 +542,35 @@ transit. Two caveats belong here rather than in a footnote:
   Compare messages by `Build`; read `Version` as "which settings format". A
   message with no `Build` header came from a build older than 1.8.
 
-## Delivery receipts
+## Receipts: read (MDN) and delivery (DSN)
 
-Every message can request a standard delivery/read receipt — the RFC 8098 MDN
-(`Disposition-Notification-To`), which is what mail clients actually honour.
-It is **on by default** (`enableReceipt: true`), matching the rule that nothing
-has to be switched on per message.
+A message can ask for **two different receipts**, and the add-on has one switch for
+each. They are independent: switching one off never switches the other off, because
+they are answered by different parties.
 
-The request is made through Thunderbird itself, not by writing the field: the
-add-on sets the native `returnReceipt` boolean on the message and Thunderbird adds
-`Disposition-Notification-To`. This is not a stylistic choice. A MailExtension may
-only put names starting with `X-` or `List-` into `customHeaders`; any other name
-makes the platform reject the details, and because that rejection happens inside
-the send path it is not caught — the message would silently never leave and no
-dialog would explain it. `psemp-gateway/test/custom-header-names.cjs` enforces the
-rule against both the source and the live listener.
+| Switch | What is asked | Who answers | Standard |
+| --- | --- | --- | --- |
+| `enableReceipt` | the recipient confirms the message was read | the recipient's mail client | MDN, RFC 8098 |
+| `enableDeliveryReceipt` | the receiving server confirms delivery or failure | the receiving server | DSN, RFC 3461 |
+
+Both are **on by default** (`enableReceipt: true`, `enableDeliveryReceipt: true`),
+matching the rule that nothing has to be switched on per message.
+
+Both requests are made through Thunderbird itself, not by writing the fields: the
+add-on sets the native `returnReceipt` and `deliveryStatusNotification` booleans on
+the message and Thunderbird adds `Disposition-Notification-To` and the DSN request
+fields. This is not a stylistic choice. A MailExtension may only put names starting
+with `X-` or `List-` into `customHeaders`; any other name makes the platform reject
+the details, and because that rejection happens inside the send path it is not
+caught — the message would silently never leave and no dialog would explain it.
+`psemp-gateway/test/custom-header-names.cjs` enforces the rule against both the
+source and the live listener.
 
 | Field / header | Written when |
 | --- | --- |
 | `returnReceipt` (native compose field → `Disposition-Notification-To`) | `enableReceipt` is on **and** a sender address is known |
-| `X-PasevSU-Receipt: requested` | same condition — marks the request as ours |
+| `deliveryStatusNotification` (native compose field → DSN request, RFC 3461) | `enableDeliveryReceipt` is on **and** a sender address is known |
+| `X-PasevSU-Receipt: requested` | either switch is on — marks the request as ours |
 
 The address is the message's own `From:` identity, resolved from the compose
 details; only if Thunderbird reports no identity does the add-on fall back to
@@ -569,9 +578,12 @@ the optional `receiptAddress` option. Nothing is written when both are empty, an
 the options page then shows a warning instead of silently producing a message
 that asks for no receipt.
 
-The request is standard, not coercive: the recipient's client **asks** them, and
-most clients show a dialog. Thunderbird's own per-account "Return Receipts"
-setting exists independently; if both prompt, that is harmless.
+The request is standard, not coercive: the read receipt is only a request, the
+recipient's client **asks** them, and most clients show a dialog. Thunderbird's own
+per-account "Return Receipts" setting exists independently; if both prompt, that is
+harmless. The delivery receipt never reaches the recipient at all — it is answered
+by the server that accepted the message, which is why it also works when the
+recipient ignores it, and why it never proves the message was read.
 
 ### Why a receipt may still never arrive
 
@@ -612,16 +624,17 @@ The options page and its hints are localised through `_locales/`:
 
 | Locale | File | Coverage |
 | --- | --- | --- |
-| English (default) | [`_locales/en/messages.json`](_locales/en/messages.json) | 36 keys |
-| German | [`_locales/de/messages.json`](_locales/de/messages.json) | 36 keys, mirrored |
-| Bulgarian | [`_locales/bg/messages.json`](_locales/bg/messages.json) | 36 keys, mirrored |
+| English (default) | [`_locales/en/messages.json`](_locales/en/messages.json) | 41 keys |
+| German | [`_locales/de/messages.json`](_locales/de/messages.json) | 41 keys, mirrored |
+| Bulgarian | [`_locales/bg/messages.json`](_locales/bg/messages.json) | 41 keys, mirrored |
 
 German was the reported gap ("there is no delivery-receipt function in German"):
-the checkbox, the fallback-address field, its hint, the warning and the
-explanation paragraph all render in German on a German Thunderbird, including
-"Lesebestätigung" terminology. Every locale must carry **exactly** the same key
-set — `psemp-gateway/test/locales.cjs` fails on a missing, extra or empty key in
-any language, so a half-translated panel cannot ship.
+both checkboxes (read and delivery receipt), the fallback-address field, its hint, the
+warning and the explanation paragraph all render in German on a German Thunderbird,
+using the standard terms "Lesebestätigung" (read receipt, MDN) and
+"Zustellbestätigung (DSN)" (delivery receipt). Every locale must carry **exactly** the
+same key set — `psemp-gateway/test/locales.cjs` fails on a missing, extra or empty key
+in any language, so a half-translated panel cannot ship.
 
 ## The two signing layers
 

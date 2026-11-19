@@ -13,7 +13,38 @@ Two versions exist in the ecosystem and must not be confused:
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Delivery receipt (DSN, RFC 3461) as a real, configurable request.**
+  `enableDeliveryReceipt` joins `enableReceipt` in the shared defaults
+  (`thunderbird-extension/background.js`, `psemp-gateway/api.js`,
+  `psemp-gateway/settings.default.json`) and gets its own checkbox in the options
+  page, translated in all three locales — German uses the standard
+  "Zustellbestätigung (DSN)". The listener now sets Thunderbird's native
+  `deliveryStatusNotification` compose field, which is the only way to request a
+  delivery receipt: the RFC 3461 header names are not admissible in
+  `customHeaders` and writing them there made the platform reject the send
+  details, so no delivery receipt had ever left the client.
+- The two receipts are **independent**. The read receipt (MDN, RFC 8098) is
+  answered by the recipient's mail client; the delivery receipt (DSN) is answered
+  by the receiving server. Each is requested only when its own switch is on, so
+  turning one off never silently turns the other off. The
+  `X-PasevSU-Receipt: requested` marker is written when **either** switch is on.
+- `psemp-gateway/test/extension-arming.cjs` grew a check asserting exactly that
+  independence, plus an assertion that the delivery receipt is requested by
+  default through the native field.
+
+### Fixed
+
+- **The read-receipt label no longer claims to be a delivery receipt.** The
+  options page, the German and Bulgarian catalogues and the protocol notes used
+  one sentence for both mechanisms; they now name the standard each one uses.
+- **`caseId` survives a settings import.** `normalizeSettings()` dropped it, so a
+  case number typed on one machine silently vanished on another
+  (`psemp-gateway/test/settings-parity.cjs` now asserts it travels).
+- `psemp-gateway/api.js`: the `loadSettings()` comment claimed "the same six
+  keys" were mirrored in the extension. It is ten, and the comment no longer
+  states a number that can rot.
 
 ---
 

@@ -114,6 +114,9 @@
   "labelReceipt": {
     "message": "Für jede Nachricht eine Lesebestätigung anfordern (Thunderbird fügt <code>Disposition-Notification-To</code> hinzu)"
   },
+  "labelDeliveryReceipt": {
+    "message": "Für jede Nachricht eine Zustellbestätigung (DSN) anfordern (Thunderbird fügt die DSN-Felder hinzu, <code>RFC 3461</code>)"
+  },
   "labelReceiptAddress": {
     "message": "Ausweichadresse für die Lesebestätigung"
   },
@@ -170,6 +173,6 @@
     "message": "Echte OpenPGP-Signaturen (<code>.asc</code>) und OpenTimestamps (<code>.ots</code>) lassen sich in einer Thunderbird-MailExtension nicht erzeugen; der Header <code>X-PasevSU-OTS</code> ist eine Markierung für das SMTP-Gateway. Mit <code>node psemp-gateway/cli.js seal PasevSU_Manifest.json</code> wird daraus eine echte abgetrennte Signatur samt Zeitnachweis. Die Markierung wird standardmäßig geschrieben, damit keine Nachricht unversiegelt hinausgeht — das Häkchen nur entfernen, wenn das Gateway bewusst nicht versiegeln soll."
   },
   "receiptNote": {
-    "message": "Die Lesebestätigung ist Standard-MDN (RFC 8098): der Empfänger wird <em>gefragt</em>, nicht verpflichtet, und die meisten Programme zeigen einen Dialog. Die Thunderbird-eigene Einstellung <em>Lesebestätigungen</em> in den Konten-Einstellungen fragt ebenfalls; wenn beides erscheint, ist das harmlos. Die Adresse ist die Identität, von der die Nachricht gesendet wird."
+    "message": "Zwei verschiedene Anfragen. Die Lesebestätigung ist Standard-MDN (RFC 8098): der Empfänger wird <em>gefragt</em>, nicht verpflichtet, und die meisten Programme zeigen einen Dialog — die Thunderbird-eigene Einstellung <em>Lesebestätigungen</em> in den Konten-Einstellungen fragt ebenfalls; wenn beides erscheint, ist das harmlos. Die Zustellbestätigung ist Standard-DSN (RFC 3461): der empfangende Server meldet Zustellung oder Fehler, der Empfänger wird nie gefragt. Beide gehen an die Adresse, von der die Nachricht gesendet wird."
   }
 }

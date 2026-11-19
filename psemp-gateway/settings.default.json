@@ -7,5 +7,6 @@
   "pgpFingerprint": "",
   "enableOts": true,
   "enableReceipt": true,
+  "enableDeliveryReceipt": true,
   "receiptAddress": ""
 }

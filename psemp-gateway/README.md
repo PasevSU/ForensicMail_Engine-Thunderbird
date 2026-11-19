@@ -89,7 +89,7 @@ with [`api.js`](api.js) `HEADER_NAMES`, the extension's `buildHeader()` calls an
 | `X-PasevSU-Merkle-Root` | Merkle root over body hash + attachment hashes |
 | `X-PasevSU-PGP-Fingerprint` | configured fingerprint — omitted when empty |
 | `X-PasevSU-OTS` | `pending` — on by default; turn off to stop marking |
-| `X-PasevSU-Receipt` | `requested` — only when `enableReceipt` is on |
+| `X-PasevSU-Receipt` | `requested` — when `enableReceipt` (read receipt) **or** `enableDeliveryReceipt` (delivery receipt) is on |
 | `X-PasevSU-Message-ID` | long `<PasevSU.…@forensic.evidence.pasevsu>` id (the gateway also writes the real `Message-ID:`) |
 | `X-PasevSU-Sha256` | digest block: `body - …`, one `name - …` per file, `timestep - …` |
 | `X-PasevSU-Cripto-Engine` | 25-digit code derived from the seal |
@@ -101,6 +101,7 @@ with [`api.js`](api.js) `HEADER_NAMES`, the extension's `buildHeader()` calls an
 | `X-PasevSU-Canary` | `PASEVSU-YYYY-MM-DD-XXXXXXXX`, names this copy |
 | `X-PasevSU-Headers-SHA256` | SHA-256 over `manifest.signed_headers` |
 | `Disposition-Notification-To` | the receipt address — only when `enableReceipt` is on; requested by **Thunderbird** via `returnReceipt`, because a MailExtension may not write that name into `customHeaders` |
+| DSN request fields (`Return-Receipt-To`-style server request, RFC 3461) | the same address — only when `enableDeliveryReceipt` is on; requested by **Thunderbird** via `deliveryStatusNotification`, again because the standard name cannot go through `customHeaders` |
 
 Every header except the four conditional ones (`-Attachments-Error`, `-Receipt`,
 `-PGP-Fingerprint` when unset, `-Attachments-SHA256` with no files) is emitted on

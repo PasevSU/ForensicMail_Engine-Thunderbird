@@ -805,12 +805,57 @@ check('a delivery receipt is requested by default, through the native field', as
   // ComposeDetails.returnReceipt is true. Putting that name in customHeaders is rejected
   // by the platform and silently kills the send, so it must never appear there.
   assert.strictEqual(out.returnReceipt, true, 'the receipt must be requested natively');
+  // The delivery receipt is a separate native boolean (RFC 3461); before this was
+  // set, only the read receipt ever left the client.
+  assert.strictEqual(
+    out.deliveryStatusNotification,
+    true,
+    'the delivery receipt must be requested natively as well',
+  );
   assert.ok(
     !headers.has('Disposition-Notification-To'),
     'a standard field must never be placed in customHeaders'
   );
   assert.strictEqual(writes.psempLastSend.receiptTo, 'pasev@example.org');
   assert.strictEqual(writes.psempReceiptError, null, 'a working receipt leaves no problem behind');
+});
+
+check('the two receipts are switched independently', async () => {
+  // Read receipt = MDN (the recipient's client answers), delivery receipt = DSN (the
+  // receiving server answers). Turning one off must never turn the other off.
+  const readOff = loadExtension({ stored: { enableReceipt: false } });
+  const first = await readOff.listeners[0]({}, {
+    isPlainText: true,
+    body: 'read off',
+    attachments: [],
+    customHeaders: [],
+    from: 'pasev@example.org',
+  });
+  assert.strictEqual(first.details.returnReceipt, undefined, 'no read receipt when its switch is off');
+  assert.strictEqual(
+    first.details.deliveryStatusNotification,
+    true,
+    'the delivery receipt must survive the read-receipt switch being off',
+  );
+
+  const deliveryOff = loadExtension({ stored: { enableDeliveryReceipt: false } });
+  const second = await deliveryOff.listeners[0]({}, {
+    isPlainText: true,
+    body: 'delivery off',
+    attachments: [],
+    customHeaders: [],
+    from: 'pasev@example.org',
+  });
+  assert.strictEqual(
+    second.details.returnReceipt,
+    true,
+    'the read receipt must survive the delivery-receipt switch being off',
+  );
+  assert.strictEqual(
+    second.details.deliveryStatusNotification,
+    undefined,
+    'no delivery receipt when its switch is off',
+  );
 });
 
 check('the receipt falls back to the configured address and a Recipient object', async () => {
@@ -919,9 +964,12 @@ check('a realistic compose snapshot is never echoed back as the return value', a
   assert.deepStrictEqual(Array.from(Object.keys(result.details)), [
     'customHeaders',
     'subject',
-    // The receipt request is a native boolean, not a header: `Disposition-Notification-To`
+    // Both receipt requests are native booleans, not headers: `Disposition-Notification-To`
     // is not an admissible custom header name and writing it there kills the send.
+    // The read receipt (MDN, RFC 8098) and the delivery receipt (DSN, RFC 3461) are
+    // requested independently, the read receipt first.
     'returnReceipt',
+    'deliveryStatusNotification',
     'body',
   ], 'nothing but the writable properties that change may be returned');
   assert.strictEqual(

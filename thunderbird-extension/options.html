@@ -121,8 +121,15 @@
     <div class="checkbox-field">
       <input type="checkbox" id="enableReceipt" />
       <label for="enableReceipt" data-i18n-html="labelReceipt"
-        >Ask for a delivery receipt on every message
+        >Ask for a read receipt on every message
         (<code>Disposition-Notification-To</code>)</label
+      >
+    </div>
+
+    <div class="checkbox-field">
+      <input type="checkbox" id="enableDeliveryReceipt" />
+      <label for="enableDeliveryReceipt" data-i18n-html="labelDeliveryReceipt"
+        >Ask for a delivery receipt on every message (DSN, <code>RFC 3461</code>)</label
       >
     </div>
     <div class="field">
