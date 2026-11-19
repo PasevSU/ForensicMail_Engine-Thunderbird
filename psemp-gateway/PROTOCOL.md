@@ -369,6 +369,29 @@ The point is that a package found in ten years can be processed without guessing
 `extra` lists what *may* be present, not what *is*. MD5 and SHA-1 are absent by design,
 and `test/replay-package.cjs` asserts that.
 
+Every field above is a setting — `algoBody`, `algoExtra`, `algoMerkle`, `algoEngine`,
+`algoSignature`, `algoTimestamp` — because a deployment that runs a different cipher or
+adds a hash must be able to say so instead of publishing a claim it does not honour. The
+defaults are the ones this build actually uses, so an untouched install writes exactly
+the object quoted above. `extra` stays an **array**: the setting is a single line,
+`SHA3-512, BLAKE3`, split on commas, and an empty line publishes `[]` rather than the
+string `""` — a verifier that reads `extra` as a list must never have to special-case a
+scalar.
+
+`framework`, `evidence_id`'s provenance words and the manifest's own file name are
+settings for the same reason. `framework` (field 1) comes from `manifestFramework`, the
+`provenance.framework`/`provenance.standard` pair from `manifestFramework`/
+`manifestStandard`, and the attachment name from `manifestFilename`. Their defaults are
+`PasevSU`, `PasevSU`, `PSEMP` and `PasevSU_Manifest.json`. Renaming the attachment is a
+contract change, not cosmetics: the sending engine recognises its own manifest by that
+name on a re-fired pass, so `manifestFilename` and `MANIFEST_FILENAME` in a verifier must
+agree.
+
+The `Message-ID` domain (§8) is the last of these: `messageIdDomain` supplies the
+right-hand side, while the left-hand side stays derived from the evidence id, so two
+sends can never collide on one identifier. A deployment that mints identifiers under its
+own domain sets it once; the default is `forensic.evidence.pasevsu`.
+
 ### 5.2 `replay`
 
 ```json

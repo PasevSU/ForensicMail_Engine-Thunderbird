@@ -34,6 +34,32 @@ foreach ($f in $files) {
   if (-not (Test-Path (Join-Path $src $f))) { throw "missing $f in $src" }
 }
 
+# Icons are read out of the manifest instead of being listed a second time: adding a
+# size to manifest.json (and running tools/make-icons.cjs) is then enough for the
+# archive to carry it. A declared-but-absent icon is a hard error, because Gecko
+# accepts the manifest and then paints an empty button.
+$declared = @()
+foreach ($key in @('icons')) {
+  if ($manifest.$key) {
+    $declared += @($manifest.$key.PSObject.Properties | ForEach-Object { $_.Value })
+  }
+}
+if ($manifest.browser_action -and $manifest.browser_action.default_icon) {
+  $iconSpec = $manifest.browser_action.default_icon
+  if ($iconSpec -is [string]) {
+    $declared += $iconSpec
+  } else {
+    $declared += @($iconSpec.PSObject.Properties | ForEach-Object { $_.Value })
+  }
+}
+$assets = @($declared | Where-Object { $_ -and $_.ToString().Trim() } | ForEach-Object { $_.ToString().Trim() } | Sort-Object -Unique)
+foreach ($f in $assets) {
+  $rel = $f.Replace('/', '\')
+  if (-not (Test-Path (Join-Path $src $rel))) {
+    throw "manifest declares '$f' but $rel is missing in $src (run tools/make-icons.cjs)"
+  }
+}
+
 # manifest.json uses __MSG_extName__ / __MSG_extDescription__ with default_locale,
 # so the archive MUST carry the _locales tree. Without it the placeholders cannot be
 # resolved, Thunderbird rejects the manifest and deletes the side-loaded .xpi on the
@@ -53,7 +79,13 @@ if (Test-Path $xpi) { Remove-Item $xpi -Force }
 $stage = Join-Path ([System.IO.Path]::GetTempPath()) ('psemp-stage-' + [guid]::NewGuid().ToString('n'))
 New-Item -ItemType Directory -Path $stage | Out-Null
 try {
-  foreach ($f in $files) { Copy-Item (Join-Path $src $f) (Join-Path $stage $f) }
+  foreach ($f in @($files) + @($assets)) {
+    $rel = $f.Replace('/', '\')
+    $dst = Join-Path $stage $rel
+    $dstDir = Split-Path -Parent $dst
+    if (-not (Test-Path $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
+    Copy-Item (Join-Path $src $rel) $dst
+  }
   if ($locales) { Copy-Item -Recurse -Force $locales (Join-Path $stage '_locales') }
   $packed = @(Get-ChildItem $stage -Recurse -File).Count
   # ZipFile.CreateFromDirectory writes Windows separators into nested entry names on
@@ -134,6 +166,51 @@ $names = [regex]::Matches(
 ) | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
 if ($names.Count -eq 0) { throw "no X-PasevSU- header names found in $bgPath" }
 
+# The receipt switches are per identity and per server, and they live in the
+# profile, not in the extension. A profile that has never asked for a receipt has
+# no such prefs at all, which is why "the extension requests it" was not enough:
+# the account said no. The ids are therefore READ from this profile instead of
+# being assumed — a new account, a removed one or a renamed one needs no edit
+# here, only another run. `identities[].request_return_receipt_on` is the switch
+# the compose window consults; the `mdn_*` quartet on the server side decides
+# when the answer is actually sent (0 = never, 1 = always, 2 = ask).
+$prefsJs = Join-Path $Profile 'prefs.js'
+$prefsText = ''
+$identityIds = @()
+$serverNames = @()
+$junkTargets = @()
+$smtpOf = @{}
+$smtpHost = @{}
+$identityEmail = @{}
+if (Test-Path $prefsJs) {
+  $prefsText = [IO.File]::ReadAllText($prefsJs)
+  $identityIds = [regex]::Matches(
+    $prefsText, 'user_pref\("mail\.identity\.(id\d+)\.useremail"'
+  ) | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+  $serverNames = [regex]::Matches(
+    $prefsText, 'user_pref\("mail\.server\.(server\d+)\.'
+  ) | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+  # Which servers actually have a junk destination, and which SMTP server each
+  # identity sends through. Both are read, never assumed: the two defects below
+  # are about accounts that are NOT configured the same way, so an id or a
+  # hostname hard-coded here would be wrong on the next profile.
+  $junkTargets = [regex]::Matches(
+    $prefsText, 'user_pref\("mail\.server\.(server\d+)\.spamActionTargetAccount"'
+  ) | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+  foreach ($match in [regex]::Matches(
+    $prefsText, 'user_pref\("mail\.identity\.(id\d+)\.smtpServer",\s*"([^"]+)"'
+  )) { $smtpOf[$match.Groups[1].Value] = $match.Groups[2].Value }
+  foreach ($match in [regex]::Matches(
+    $prefsText, 'user_pref\("mail\.identity\.(id\d+)\.useremail",\s*"([^"]+)"'
+  )) { $identityEmail[$match.Groups[1].Value] = $match.Groups[2].Value }
+  foreach ($match in [regex]::Matches(
+    $prefsText, 'user_pref\("mail\.smtp\.(smtp\d+)\.hostname",\s*"([^"]+)"'
+  )) { $smtpHost[$match.Groups[1].Value] = $match.Groups[2].Value }
+}
+if ($identityIds.Count -eq 0) {
+  Write-Host 'no identity found in prefs.js — receipt prefs are left untouched' -ForegroundColor Yellow
+}
+
 $userJs = Join-Path $Profile 'user.js'
 $hadUserJs = Test-Path $userJs
 $text = if ($hadUserJs) { [IO.File]::ReadAllText($userJs) } else { '' }
@@ -154,6 +231,40 @@ function Set-PrefLine([string]$body, [string]$key, [string]$line) {
   return $body.TrimEnd() + "`n" + $line
 }
 
+# user.js may carry a list-valued pref as a multi-line array literal, one entry
+# per line, because 27 header names on one line are unreadable:
+#
+#   user_pref(
+#     "mail.compose.other.header",
+#     [
+#       "X-PasevSU-Version",
+#       ...
+#     ].join(","),
+#   );
+#
+# Set-PrefLine matches ONE line by design, so it could not see that literal and
+# silently APPENDED a second definition of the same key. The duplicate stayed
+# invisible because user.js is applied in file order and the appended line came
+# last — the file still "worked", while carrying two contradictory values. This
+# helper flattens the array form into the equivalent one-line form FIRST, so the
+# replacement below has a single line to rewrite and the profile ends up with
+# exactly one mail.compose.other.header.
+function Compress-PrefArray([string]$body, [string]$key) {
+  $pattern = '(?s)(?m)^[ \t]*user_pref\(\s*"' + [regex]::Escape($key) +
+    '"\s*,\s*\[(.*?)\]\s*\.join\(\s*"([^"]*)"\s*\)\s*,?\s*\)\s*;[ \t]*$'
+  $match = [regex]::Match($body, $pattern)
+  while ($match.Success) {
+    $separator = $match.Groups[2].Value
+    $values = @([regex]::Matches($match.Groups[1].Value, '"([^"]*)"') |
+      ForEach-Object { $_.Groups[1].Value })
+    $line = 'user_pref("' + $key + '", "' + ($values -join $separator) + '");'
+    $body = $body.Substring(0, $match.Index) + $line +
+      $body.Substring($match.Index + $match.Length)
+    $match = [regex]::Match($body, $pattern)
+  }
+  return $body
+}
+
 $composeLine = 'user_pref("mail.compose.other.header", "' + ($names -join ',') + '");'
 $expandedLine = 'user_pref("mailnews.headers.extraExpandedHeaders", "' + (($names | ForEach-Object { $_.ToLower() }) -join ' ') + '");'
 # These two decide whether the add-on is ARMED after a rebuild, so their values
@@ -171,10 +282,65 @@ $expandedLine = 'user_pref("mailnews.headers.extraExpandedHeaders", "' + (($name
 # Set-PrefLine REPLACES an existing line, so a profile that says 15 (the value
 # chosen for a "confirm every side-load" posture) is corrected here rather than
 # left contradicting the build.
+$text = Compress-PrefArray $text 'mail.compose.other.header'
+$text = Compress-PrefArray $text 'mailnews.headers.extraExpandedHeaders'
 $text = Set-PrefLine $text 'mail.compose.other.header' $composeLine
 $text = Set-PrefLine $text 'mailnews.headers.extraExpandedHeaders' $expandedLine
 $text = Set-PrefLine $text 'extensions.autoDisableScopes' 'user_pref("extensions.autoDisableScopes", 0);'
 $text = Set-PrefLine $text 'xpinstall.signatures.required' 'user_pref("xpinstall.signatures.required", false);'
+
+# The receipt prefs are written for EVERY identity in this profile, and the ids
+# come from prefs.js above, so switching identity in the compose window cannot
+# quietly turn the request off. (Observed: id8 asked for a receipt, id9 — the
+# identity actually in use — had no pref at all, so half the accounts were silent.)
+foreach ($identityId in $identityIds) {
+  $text = Set-PrefLine $text "mail.identity.$identityId.request_return_receipt_on" `
+    ('user_pref("mail.identity.{0}.request_return_receipt_on", true);' -f $identityId)
+}
+# The global switch Thunderbird consults before offering the checkbox at all, and
+# the four policy gates that decide whether an inbound request is honoured:
+# on / not_in_to_cc / outside_domain / other. 1 = report, 2 = ask, 0 = never.
+# A receipt the extension asked for must be answered by this machine too, or the
+# other half of the loop stays silent.
+$text = Set-PrefLine $text 'mail.receipt.request_return_receipt_on' 'user_pref("mail.receipt.request_return_receipt_on", true);'
+$text = Set-PrefLine $text 'mail.mdn.report.enabled' 'user_pref("mail.mdn.report.enabled", true);'
+foreach ($policy in @('not_in_to_cc', 'outside_domain', 'other')) {
+  $text = Set-PrefLine $text "mail.mdn.report.$policy" ('user_pref("mail.mdn.report.{0}", 1);' -f $policy)
+}
+# Mail that carries the junk flag is never offered for a read receipt:
+# Thunderbird skips the MDN bar for isJunk messages, and a MailExtension cannot
+# reach that code path. The profile-side answer — and the only one that survives
+# an application update — is to stop the local classifier from disqualifying a
+# correspondent behind the operator's back. manualMark means a header is tagged
+# junk only when a filter or the operator asks for it, so an ordinary sender is
+# never silently excluded from the receipt loop. Logging is kept on so that when a
+# receipt IS suppressed, junklog.html shows whether a junk mark caused it.
+$text = Set-PrefLine $text 'mail.spam.manualMark' 'user_pref("mail.spam.manualMark", true);'
+$text = Set-PrefLine $text 'mail.spam.logging.enabled' 'user_pref("mail.spam.logging.enabled", true);'
+$junkAligned = @()
+foreach ($serverName in $serverNames) {
+  $text = Set-PrefLine $text "mail.server.$serverName.mdn_report_enabled" `
+    ('user_pref("mail.server.{0}.mdn_report_enabled", true);' -f $serverName)
+  # The per-server trio the profile actually carries (server13 already has all
+  # three). Writing only the global `mail.mdn.report.*` would leave a server with
+  # its own policy in charge, which is how "the checkbox is on but nothing comes
+  # back" happened.
+  foreach ($policy in @('not_in_to_cc', 'outside_domain', 'other')) {
+    $text = Set-PrefLine $text "mail.server.$serverName.mdn_$policy" `
+      ('user_pref("mail.server.{0}.mdn_{1}", 1);' -f $serverName, $policy)
+  }
+  # The junk filter belongs to the server, and this switch decides whether that
+  # account is filtered at all. It was set on the two accounts that were
+  # configured by hand and absent on the other eight, so the same message could be
+  # junk-tagged — and lose its receipt — on one mailbox and not on another. It is
+  # written for every server that has a junk destination in THIS profile; the list
+  # comes from prefs.js, so a newly added account is covered without editing here.
+  if ($junkTargets -contains $serverName) {
+    $text = Set-PrefLine $text "mail.server.$serverName.useServerFilter" `
+      ('user_pref("mail.server.{0}.useServerFilter", true);' -f $serverName)
+    $junkAligned += $serverName
+  }
+}
 
 # A duplicate key is not harmless: user.js is applied in file order and the LAST
 # assignment wins, so a stale `autoDisableScopes = 15` earlier in the file would
@@ -198,6 +364,44 @@ if (-not $text.EndsWith(';')) { $text += ';' }
 [IO.File]::WriteAllText($userJs, $text, (New-Object System.Text.UTF8Encoding($false)))
 
 Write-Host ('user.js   {0} header names registered, LF, no BOM' -f $names.Count)
+if ($identityIds.Count -gt 0) {
+  Write-Host ('prefs     receipts requested for {0} identity(ies), {1} server(s) answer MDNs' -f $identityIds.Count, $serverNames.Count)
+}
+if ($junkAligned.Count -gt 0) {
+  Write-Host ('junk      one filter setting for every mailbox: {0}' -f ($junkAligned -join ', '))
+}
+
+# Delivery receipts leave through the identity's SMTP server, and a relay that
+# rewrites the envelope (a hosted relay such as Brevo does) breaks the address the
+# recipient's server answers to — the MDN goes nowhere and the send looks clean.
+# The extension cannot see the envelope, so the only honest thing to do is read
+# which identity uses which host and say so, instead of promising receipts that a
+# relay will swallow.
+$relayed = @()
+foreach ($identityId in $smtpOf.Keys) {
+  $smtpName = $smtpOf[$identityId]
+  $smtpServerName = ''
+  if ($smtpHost.ContainsKey($smtpName)) { $smtpServerName = $smtpHost[$smtpName] }
+  $address = ''
+  if ($identityEmail.ContainsKey($identityId)) { $address = $identityEmail[$identityId] }
+  # An identity is "relayed" when it sends through a host outside its own domain.
+  # Both sides of that comparison come from prefs.js: no hostname is written into
+  # this script, so the warning follows whatever the profile actually does.
+  if (-not $smtpServerName) { continue }
+  $domain = ''
+  if ($address -match '@([^@]+)$') { $domain = $matches[1] }
+  if (-not $domain) { continue }
+  if ($smtpServerName -notlike ('*' + $domain)) {
+    $relayed += ('{0} ({1}) -> {2} ({3})' -f $identityId, $address, $smtpName, $smtpServerName)
+  }
+}
+if ($relayed.Count -gt 0) {
+  Write-Host ''
+  Write-Host 'Relay warning: these identities send through a host outside their own domain.' -ForegroundColor Yellow
+  foreach ($line in $relayed) { Write-Host ('  ' + $line) -ForegroundColor Yellow }
+  Write-Host '  A relay that rewrites the envelope can lose the read/delivery receipt. Use an' -ForegroundColor Yellow
+  Write-Host '  identity that sends through its own domain for mail that must come back with one.' -ForegroundColor Yellow
+}
 
 Write-Host ''
 if ($mapped) {

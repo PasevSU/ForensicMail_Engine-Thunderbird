@@ -62,6 +62,11 @@ const DEFAULTS = Object.freeze({
   organization: 'PasevSU',
   caseId: '',
   pgpFingerprint: '',
+  // The WAR notice is generated from these two values, not from constants, so a
+  // different operator or a rotated key is a settings change rather than a code
+  // change. They must stay byte-compatible with the extension's own defaults.
+  pgpSigner: 'pasevdenislav@gmail.com',
+  pgpStandard: 'OpenPGP/MIME signed message (RFC 4880 and 3156)',
   // On by default so the marker is written without any per-message decision; the
   // extension's options page can turn it off and that stored value wins.
   enableOts: true,
@@ -73,12 +78,53 @@ const DEFAULTS = Object.freeze({
   // Delivery receipt (DSN, RFC 3461). The receiving server answers this one, the
   // recipient is never asked, so it is a separate request and a separate switch.
   enableDeliveryReceipt: true,
+  // Where the address for both receipts comes from. The extension reads it from the
+  // Thunderbird profile per send, so the gateway only has to carry the value through.
+  receiptMode: 'identity',
   receiptAddress: '',
+  // The right-hand side of every Message-ID. The left-hand side is derived from the
+  // evidence id, so only the domain can be chosen — but it IS a choice: it names the
+  // organisation that minted the identifier, and a second deployment must be able to
+  // say so instead of borrowing this one's domain.
+  messageIdDomain: 'forensic.evidence.pasevsu',
+  // The file name the manifest is written under, and the name every verification
+  // instruction refers to. Not cosmetic: the package builder names it in the steps it
+  // tells a verifier to run, so a deployment that renames it must rename it here.
+  manifestFilename: MANIFEST_FILENAME,
+  // The two protocol discriminators written INSIDE the manifest and the provenance
+  // block. A verifier cuts on these names, so they stay PSEMP by default; they are
+  // settings only so a forked protocol does not need a patch to say its name.
+  manifestFramework: FRAMEWORK,
+  manifestStandard: 'PSEMP',
+  // The `algorithms` block the manifest publishes, one setting per field it contains.
+  // The defaults are the hashes and ciphers this build really uses, so an untouched
+  // install records exactly what runs. `algoExtra` is a comma-separated list because
+  // the manifest needs it as an ARRAY and a settings file can only hold one value.
+  algoBody: 'SHA-256',
+  algoExtra: 'SHA3-512, BLAKE3',
+  algoMerkle: 'SHA-256',
+  algoEngine: 'AES-256-GCM',
+  algoSignature: 'OpenPGP',
+  algoTimestamp: 'OpenTimestamps',
 });
 
 const SETTINGS_FILENAME = 'settings.default.json';
 const SETTINGS_PATH = path.join(__dirname, SETTINGS_FILENAME);
 let settingsCache = null;
+
+/**
+ * The six settings that become the manifest's `algorithms` block, in the order the
+ * block publishes them. Held as a list so one loop can normalise them and the gateway
+ * cannot drift from the extension by forgetting a field.
+ */
+const ALGORITHM_KEYS = Object.freeze([
+  'algoBody',
+  'algoExtra',
+  'algoMerkle',
+  'algoEngine',
+  'algoSignature',
+  'algoTimestamp',
+]);
 
 /**
  * Shared defaults, read from `settings.default.json` beside this file.
@@ -159,49 +205,110 @@ const MDN_HEADER = 'Disposition-Notification-To';
 /** Subject suffix and body sentinel. Never configurable — see PROTOCOL.md §4a. */
 const WAR_MARKER = '{{ PasevSU-WAR }}';
 
-/** Address whose registered OpenPGP key is the only accepted proof of origin. */
-const WAR_SIGNER = 'pasevdenislav@gmail.com';
-
-/** Signature standard the marker refers to. */
-const WAR_STANDARD = 'OpenPGP/MIME signed message (RFC 4880 and 3156)';
-
-/*
- * The three sentences below are the whole statement, and they are the CONTRACT.
- * thunderbird-extension/background.js must produce byte-identical values for
- * WAR_HEADER_TEXT, WAR_NOTICE_TEXT and WAR_NOTICE_HTML —
- * test/extension-arming.cjs fails otherwise.
+/**
+ * Address whose registered OpenPGP key is the only accepted proof of origin.
+ *
+ * Not a code constant: `pgpSigner` is a setting, so a different operator, a different
+ * mailbox or a rotated key never needs a patch. The value below is only what a fresh
+ * install starts with, and every use goes through {@link warTexts} so an override can
+ * change the wording but never the structure a verifier cuts on.
  */
-const WAR_NO_SIGNATURE =
-  `An email that does not carry the ${WAR_STANDARD} signature made with the PGP `
-  + `key registered to ${WAR_SIGNER} is not ours.`;
+const WAR_SIGNER = DEFAULTS.pgpSigner;
+
+/** Signature standard the marker refers to — setting `pgpStandard`, same rule. */
+const WAR_STANDARD = DEFAULTS.pgpStandard;
+
 const WAR_PROOF =
   'Only that signature proves our identity and preserves the integrity of the message.';
 const WAR_FORBIDDEN = 'FORWARDING THIS EMAIL IS STRICTLY FORBIDDEN.';
 
-/** Value of `X-PasevSU-WAR` (and of the unprefixed twin). ASCII-only by contract. */
-const WAR_HEADER_TEXT =
-  `${WAR_NO_SIGNATURE} ${WAR_PROOF} FORWARDING THIS EMAIL IS STRICTLY FORBIDDEN `
-  + `AND IS STATED EXPLICITLY IN THE EMAIL BODY. ${WAR_MARKER}`;
+/**
+ * Flatten a configured value into something a header can carry.
+ *
+ * A stored setting is user input: it may be empty, padded, or carry a newline that
+ * would split the header in two. Newlines collapse into a space for the same reason
+ * the extension does it — `X-PasevSU-WAR` must stay one line on the wire.
+ *
+ * @param {*} value
+ * @returns {string}
+ */
+function warSafeText(value) {
+  return String(value == null ? '' : value).replace(/[\r\n]+/g, ' ').trim();
+}
 
 /**
- * Exact suffix of every outgoing plain-text body.
+ * Generate the three WAR texts for one signer and one signature standard.
  *
- * A verifier reproduces `X-PasevSU-Body-SHA256` by removing this whole constant with
- * `endsWith`, never by searching for a substring — the marker alone is not a safe cut
- * point, because an authored body is allowed to contain the marker too.
+ * The three sentences below are the whole statement, and they are the CONTRACT:
+ * thunderbird-extension/background.js must produce byte-identical values for
+ * WAR_HEADER_TEXT, WAR_NOTICE_TEXT and WAR_NOTICE_HTML —
+ * test/extension-arming.cjs fails otherwise. One generator serves both the shipped
+ * default and a configured signer, so the wording can be overridden while the shape
+ * (`marker`, blank-line prefix, single trailing newline) cannot.
+ *
+ * An empty or missing value falls back to the shipped default instead of producing a
+ * notice that names nobody: an unset `pgpSigner` must never weaken the claim.
+ *
+ * @param {*} signer address whose key proves origin
+ * @param {*} standard signature standard the marker refers to
+ * @returns {{headerText: string, noticeText: string, noticeHtml: string}}
  */
-const WAR_NOTICE_TEXT =
-  `\n\n${WAR_MARKER}\n${WAR_NO_SIGNATURE}\n${WAR_PROOF}\n${WAR_FORBIDDEN}\n`;
+function warTexts(signer, standard) {
+  const who = warSafeText(signer) || WAR_SIGNER;
+  const std = warSafeText(standard) || WAR_STANDARD;
+  const noSignature =
+    `An email that does not carry the ${std} signature made with the PGP `
+    + `key registered to ${who} is not ours.`;
+  return {
+    /** Value of `X-PasevSU-WAR` (and of the unprefixed twin). ASCII-only by contract. */
+    headerText:
+      `${noSignature} ${WAR_PROOF} FORWARDING THIS EMAIL IS STRICTLY FORBIDDEN `
+      + `AND IS STATED EXPLICITLY IN THE EMAIL BODY. ${WAR_MARKER}`,
+    /**
+     * Exact suffix of every outgoing plain-text body.
+     *
+     * A verifier reproduces `X-PasevSU-Body-SHA256` by removing this whole value with
+     * `endsWith`, never by searching for a substring — the marker alone is not a safe
+     * cut point, because an authored body is allowed to contain the marker too.
+     */
+    noticeText: `\n\n${WAR_MARKER}\n${noSignature}\n${WAR_PROOF}\n${WAR_FORBIDDEN}\n`,
+    /** The same wording for an HTML composer; markup only, never different claims. */
+    noticeHtml:
+      '<div class="pasevsu-war" data-pasevsu-war="1" style="margin-top:16px;'
+      + 'padding-top:8px;border-top:1px solid #999;font-size:smaller">'
+      + `<p><strong>${WAR_MARKER}</strong></p>`
+      + `<p>An email that does not carry the ${std} signature made with the `
+      + `PGP key registered to <a href="mailto:${who}">${who}</a> is not `
+      + `ours. ${WAR_PROOF}</p>`
+      + `<p><strong>${WAR_FORBIDDEN}</strong></p></div>`,
+  };
+}
 
-/** The same wording for an HTML composer; markup only, never different claims. */
-const WAR_NOTICE_HTML =
-  '<div class="pasevsu-war" data-pasevsu-war="1" style="margin-top:16px;'
-  + 'padding-top:8px;border-top:1px solid #999;font-size:smaller">'
-  + `<p><strong>${WAR_MARKER}</strong></p>`
-  + `<p>An email that does not carry the ${WAR_STANDARD} signature made with the `
-  + `PGP key registered to <a href="mailto:${WAR_SIGNER}">${WAR_SIGNER}</a> is not `
-  + `ours. ${WAR_PROOF}</p>`
-  + `<p><strong>${WAR_FORBIDDEN}</strong></p></div>`;
+/* The shipped wording, byte-identical to what thunderbird-extension/background.js quotes. */
+const WAR_DEFAULT_TEXTS = warTexts(WAR_SIGNER, WAR_STANDARD);
+const WAR_NO_SIGNATURE =
+  `An email that does not carry the ${WAR_STANDARD} signature made with the PGP `
+  + `key registered to ${WAR_SIGNER} is not ours.`;
+const WAR_HEADER_TEXT = WAR_DEFAULT_TEXTS.headerText;
+const WAR_NOTICE_TEXT = WAR_DEFAULT_TEXTS.noticeText;
+const WAR_NOTICE_HTML = WAR_DEFAULT_TEXTS.noticeHtml;
+
+/**
+ * The WAR texts for one resolved settings object.
+ *
+ * Mirrors `warTextsFor` in thunderbird-extension/background.js. Callers that already
+ * ran {@link resolveConfig} pass the result; callers that did not get the shipped
+ * defaults, never an empty signature.
+ *
+ * @param {{pgpSigner?: string, pgpStandard?: string}} [config]
+ * @returns {{headerText: string, noticeText: string, noticeHtml: string}}
+ */
+function warTextsFor(config) {
+  return warTexts(
+    config && config.pgpSigner,
+    config && config.pgpStandard
+  );
+}
 
 /**
  * Make sure the Subject ends with {@link WAR_MARKER}.
@@ -247,13 +354,17 @@ function warBodyField(details) {
  *
  * @param {{isPlainText?: boolean, body?: string, plainTextBody?: string}} details
  * @param {'body'|'plainTextBody'} field
+ * @param {{headerText: string, noticeText: string, noticeHtml: string}} [texts]
+ *        the wording for this message (see {@link warTextsFor}); omitted means the
+ *        shipped default, which is what every caller outside the send path wants
  * @returns {string|null}
  */
-function withWarNotice(details, field) {
+function withWarNotice(details, field, texts) {
   const value = details[field];
   if (typeof value !== 'string' || value.includes(WAR_MARKER)) return null;
   const plain = details.isPlainText === true || field === 'plainTextBody';
-  return plain ? `${value}${WAR_NOTICE_TEXT}` : `${value}${WAR_NOTICE_HTML}`;
+  const resolved = texts || WAR_DEFAULT_TEXTS;
+  return plain ? `${value}${resolved.noticeText}` : `${value}${resolved.noticeHtml}`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -504,7 +615,48 @@ function resolveConfig(config) {
   merged.organization = sanitizeHeaderValue(merged.organization) || DEFAULTS.organization;
   merged.pgpFingerprint = normalizeFingerprint(merged.pgpFingerprint);
   merged.enableOts = merged.enableOts === true || merged.enableOts === 'true';
+  merged.messageIdDomain = messageIdHost(merged.messageIdDomain);
+  merged.manifestFilename = manifestFilenameFor(merged);
+  merged.manifestFramework =
+    sanitizeHeaderValue(merged.manifestFramework) || DEFAULTS.manifestFramework;
+  merged.manifestStandard =
+    sanitizeHeaderValue(merged.manifestStandard) || DEFAULTS.manifestStandard;
+  for (const key of ALGORITHM_KEYS) {
+    if (key === 'algoExtra') {
+      // An empty list is a real choice — "publish no extra hashes" — so it is trimmed
+      // but never replaced with the default.
+      merged.algoExtra = merged.algoExtra == null ? DEFAULTS.algoExtra : String(merged.algoExtra).trim();
+      continue;
+    }
+    merged[key] = sanitizeHeaderValue(merged[key]) || DEFAULTS[key];
+  }
   return merged;
+}
+
+/**
+ * The right-hand side of every Message-ID, taken from the setting `messageIdDomain`.
+ * A stored setting is user input, so anything that would break the `<local@host>`
+ * shape is dropped here rather than producing a header no parser can read back. An
+ * empty result falls back to the shipped domain, because a Message-ID without a host
+ * is not a Message-ID.
+ */
+function messageIdHost(value) {
+  const host = sanitizeHeaderValue(value).replace(/[<>\s@]/g, '');
+  return host || DEFAULTS.messageIdDomain;
+}
+
+/**
+ * The name the manifest is written under, taken from the setting `manifestFilename`.
+ * Not cosmetic: the package builder tells a verifier to run steps against this name,
+ * so a stored value that cannot be a file name would make a package unverifiable.
+ * Path separators and the characters Windows forbids are stripped, and an empty
+ * result falls back to the shipped name.
+ */
+function manifestFilenameFor(config) {
+  const cleaned = sanitizeHeaderValue(config && config.manifestFilename)
+    .replace(/[\\/:*?"<>|]/g, '')
+    .trim();
+  return cleaned || MANIFEST_FILENAME;
 }
 
 /**
@@ -536,7 +688,7 @@ function buildManifest({
   // Everything from `algorithms` down was APPENDED in PSEMP 1.1 (see PROTOCOL.md §5);
   // appending keeps every hash the extension already published recomputable.
   return {
-    framework: FRAMEWORK,
+    framework: resolved.manifestFramework,
     version: resolved.version,
     message_sha256: bodyHash,
     message_sha3_512: bodySha3 === undefined ? null : bodySha3,
@@ -549,7 +701,7 @@ function buildManifest({
     merkle_root: merkle,
     timestamp: timestamp || new Date().toISOString(),
     evidence_id: evidenceId,
-    algorithms: buildAlgorithms(),
+    algorithms: buildAlgorithms(resolved),
     provenance:
       provenance ||
       buildProvenance({
@@ -557,6 +709,8 @@ function buildManifest({
         evidenceId,
         issuedAt: replay && replay.issued_at,
         organization: resolved.organization,
+        framework: resolved.manifestFramework,
+        standard: resolved.manifestStandard,
       }),
     signed_headers: signedHeaders || null,
     replay: replay || null,
@@ -667,13 +821,17 @@ function decryptDigestBlock(code, token, { merkleRoot: _merkleRoot = '' } = {}) 
 /**
  * A long Message-ID carrying non-standard (but RFC 5322 dot-atom legal) characters
  * `+ _ ~`, so a PasevSU message is trivially recognisable in any mail store.
+ *
+ * Only the domain is configurable: the local part is derived from the evidence id, so a
+ * second deployment says WHO minted the identifier without being able to forge a
+ * different one. A caller that omits `domain` gets the shipped value.
  */
-function buildMessageId({ evidenceId = '', timestamp = '' } = {}) {
+function buildMessageId({ evidenceId = '', timestamp = '', domain = '' } = {}) {
   const stamp = String(timestamp || '').replace(/[^0-9]/g, '').slice(0, 14).padEnd(14, '0');
   const seed = sha256Hex(`${ENGINE_LABEL}|msgid|${evidenceId}|${stamp}`);
   const slug = (offset, length) => seed.slice(offset, offset + length);
   const local = `PasevSU.${stamp}.${evidenceId || slug(0, 8)}+${slug(8, 6)}_${slug(14, 6)}~${slug(20, 6)}.${slug(26, 6)}`;
-  return `<${local}@forensic.evidence.pasevsu>`;
+  return `<${local}@${messageIdHost(domain)}>`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -708,15 +866,27 @@ const REPLAY_DEFAULTS = Object.freeze({
   windowSize: 4096,
 });
 
-/** The algorithms this build actually uses, recorded so a package is readable later. */
-function buildAlgorithms() {
+/**
+ * The algorithms this build actually uses, recorded so a package is readable later.
+ *
+ * Every field is a setting, because a forked deployment may digest with something else
+ * and a package must say what really ran. The defaults are exactly what this build
+ * publishes, so a call with no argument — which the tests and the manifest builder both
+ * make — returns the shipped block. `extra` stays an ARRAY: a verifier iterates it.
+ */
+function buildAlgorithms(config) {
+  const resolved = config ? resolveConfig(config) : DEFAULTS;
+  const extra = String(resolved.algoExtra == null ? '' : resolved.algoExtra)
+    .split(',')
+    .map((name) => sanitizeHeaderValue(name))
+    .filter(Boolean);
   return {
-    body: 'SHA-256',
-    extra: ['SHA3-512', 'BLAKE3'],
-    merkle: 'SHA-256',
-    engine: 'AES-256-GCM',
-    signature: 'OpenPGP',
-    timestamp: 'OpenTimestamps',
+    body: resolved.algoBody,
+    extra,
+    merkle: resolved.algoMerkle,
+    engine: resolved.algoEngine,
+    signature: resolved.algoSignature,
+    timestamp: resolved.algoTimestamp,
   };
 }
 
@@ -724,11 +894,22 @@ function buildAlgorithms() {
  * Boundary watermark: the recipient, the issue time and the message id written INSIDE
  * the hashed manifest (not only in the visible headers), so a leaked copy still names
  * the envelope it was minted for even if the headers were stripped in transit.
+ *
+ * The two protocol words are settings so a forked protocol can name itself, but they
+ * default to the words every verifier in this repo already cuts on.
  */
-function buildProvenance({ recipient = '', messageId = '', evidenceId = '', issuedAt = '', organization = '' } = {}) {
+function buildProvenance({
+  recipient = '',
+  messageId = '',
+  evidenceId = '',
+  issuedAt = '',
+  organization = '',
+  framework = '',
+  standard = '',
+} = {}) {
   return {
-    framework: FRAMEWORK,
-    standard: 'PSEMP',
+    framework: sanitizeHeaderValue(framework) || DEFAULTS.manifestFramework,
+    standard: sanitizeHeaderValue(standard) || DEFAULTS.manifestStandard,
     organization: sanitizeHeaderValue(organization),
     evidence_id: sanitizeHeaderValue(evidenceId),
     recipient: sanitizeHeaderValue(recipient),
@@ -991,9 +1172,12 @@ function buildHeaderLines({
   lines.push(`${HEADER_NAMES.origin}: ${resolved.origin}`);
   lines.push(`${HEADER_NAMES.organization}: ${resolved.organization}`);
   // The war line sits with the identity block, not at the end: it is part of who
-  // sent the message. Both spellings, same twin rule as Message-ID below.
-  lines.push(`PasevSU-WAR: ${WAR_HEADER_TEXT}`);
-  lines.push(`${HEADER_NAMES.war}: ${WAR_HEADER_TEXT}`);
+  // sent the message. Both spellings, same twin rule as Message-ID below. The wording
+  // is generated from the resolved settings, so a different operator names themself
+  // instead of inheriting a hard-coded address.
+  const war = warTextsFor(resolved);
+  lines.push(`PasevSU-WAR: ${war.headerText}`);
+  lines.push(`${HEADER_NAMES.war}: ${war.headerText}`);
   lines.push(`${HEADER_NAMES.evidenceId}: ${sanitizeHeaderValue(evidenceId)}`);
   if (resolved.caseId) {
     lines.push(`${HEADER_NAMES.caseId}: ${sanitizeHeaderValue(resolved.caseId)}`);
@@ -1016,7 +1200,11 @@ function buildHeaderLines({
   }
   // Appended (never interleaved) so the established header order above stays a contract.
   const stamp = timestamp || new Date().toISOString();
-  const messageId = buildMessageId({ evidenceId, timestamp: stamp });
+  const messageId = buildMessageId({
+    evidenceId,
+    timestamp: stamp,
+    domain: resolved.messageIdDomain,
+  });
   // The gateway composes the whole message, so it can write the real field as well.
   // It has no transport of its own (§2), so the line lives in the bundle, not on the
   // wire. The extension cannot write it at all: ComposeDetails.customHeaders rejects
@@ -1130,7 +1318,11 @@ function computeEvidence({
     recipient: primaryRecipient,
     maxAgeSeconds,
   });
-  const messageId = buildMessageId({ evidenceId: id, timestamp: stamp });
+  const messageId = buildMessageId({
+    evidenceId: id,
+    timestamp: stamp,
+    domain: resolved.messageIdDomain,
+  });
   const signedHeaders = buildSignedHeaders({
     subject,
     from,
@@ -1145,6 +1337,8 @@ function computeEvidence({
     evidenceId: id,
     issuedAt: replay.issued_at,
     organization: resolved.organization,
+    framework: resolved.manifestFramework,
+    standard: resolved.manifestStandard,
   });
   const manifest = buildManifest({
     config: resolved,
@@ -1187,7 +1381,7 @@ function computeEvidence({
     merkleRoot: merkle,
     manifest,
     manifestText,
-    manifestFilename: MANIFEST_FILENAME,
+    manifestFilename: resolved.manifestFilename,
     manifestSha256: manifestHash,
     // PSEMP 1.1 additions, surfaced so a caller does not have to re-derive them.
     messageId,
@@ -1406,7 +1600,9 @@ function applyToComposeDetails(details, options = {}) {
    */
   source.subject = appendWarMarker(source.subject);
   const warField = warBodyField(source);
-  const warBody = warField ? withWarNotice(source, warField) : null;
+  // Same settings the headers above were built from, so the header and the body can
+  // never disagree about who signed or which standard applies.
+  const warBody = warField ? withWarNotice(source, warField, warTextsFor(resolveConfig(options.config))) : null;
   if (warBody !== null) source[warField] = warBody;
   // Opt-in only: rewriting the Subject is visible to every recipient and breaks mail
   // threading, so the tag is never applied unless asked for explicitly (PROTOCOL.md §9).
@@ -1620,11 +1816,20 @@ function buildEvidencePackage(evidence, options = {}) {
   const provenance = manifest.provenance && typeof manifest.provenance === 'object' ? manifest.provenance : {};
   const manifestText = source.manifestText || serializeManifest(manifest);
   const manifestDigest = source.manifestSha256 || manifestSha256(manifestText);
+  // The file name is a setting, so every instruction below names the file the operator
+  // really produced. A verifier types these steps verbatim, so a renamed manifest that
+  // the package still called `PasevSU_Manifest.json` would be unusable.
+  const manifestName =
+    sanitizeHeaderValue(options.manifestFilename) ||
+    sanitizeHeaderValue(source.manifestFilename) ||
+    sanitizeHeaderValue(manifest.manifestFilename) ||
+    MANIFEST_FILENAME;
+  const algorithms = buildAlgorithms(source.config || options.config);
 
   const files = [
     {
       role: 'manifest',
-      filename: MANIFEST_FILENAME,
+      filename: manifestName,
       sha256: manifestDigest,
       sha3_512: null,
       note: 'hashes and links every other file listed here',
@@ -1647,8 +1852,8 @@ function buildEvidencePackage(evidence, options = {}) {
   }
 
   const manifestPath = options.manifestPath ? path.resolve(String(options.manifestPath)) : '';
-  const sidecar = manifestPath ? `${manifestPath}.asc` : `${MANIFEST_FILENAME}.asc`;
-  const proof = manifestPath ? `${manifestPath}.ots` : `${MANIFEST_FILENAME}.ots`;
+  const sidecar = manifestPath ? `${manifestPath}.asc` : `${manifestName}.asc`;
+  const proof = manifestPath ? `${manifestPath}.ots` : `${manifestName}.ots`;
 
   // The canary is derived, never stored in the manifest: a bare manifest still
   // carries every input, so recompute it instead of reporting an empty field.
@@ -1665,10 +1870,10 @@ function buildEvidencePackage(evidence, options = {}) {
 
   return {
     package: 'PasevSU_Evidence_Package',
-    standard: 'PSEMP',
+    standard: sanitizeHeaderValue(provenance.standard) || DEFAULTS.manifestStandard,
     version: manifest.version || DEFAULTS.version,
     generated_at: new Date().toISOString(),
-    algorithms: buildAlgorithms(),
+    algorithms,
     evidence: {
       evidence_id: manifest.evidence_id || '',
       message_sha256: manifest.message_sha256 || '',
@@ -1686,22 +1891,22 @@ function buildEvidencePackage(evidence, options = {}) {
     signed_headers: manifest.signed_headers || null,
     files,
     signature: {
-      algorithm: 'OpenPGP',
+      algorithm: algorithms.signature,
       fingerprint: normalizeFingerprint(options.pgpFingerprint || ''),
       detached: describeSidecar(sidecar, 'signature'),
       note: 'A MailExtension cannot run gpg. The signature is written by psemp-gateway seal.',
     },
     timestamp: {
-      algorithm: 'OpenTimestamps',
+      algorithm: algorithms.timestamp,
       proof: describeSidecar(proof, 'timestamp'),
       note: 'A MailExtension cannot run ots. The proof is written by psemp-gateway stamp/seal.',
     },
     verify: [
-      'sha256(PasevSU_Manifest.json) must equal files[role=manifest].sha256',
+      `sha256(${manifestName}) must equal files[role=manifest].sha256`,
       'recompute SHA-256 of the body and of every attachment; each must equal its file entry',
       'sort the hex leaves (body first, then attachments) and rebuild the Merkle root; it must equal evidence.merkle_root',
-      'gpg --verify PasevSU_Manifest.json.asc PasevSU_Manifest.json',
-      'ots verify PasevSU_Manifest.json.ots',
+      `gpg --verify ${manifestName}.asc ${manifestName}`,
+      `ots verify ${manifestName}.ots`,
       'refuse the message again if evidence.nonce was already accepted (replay defence)',
       'compare evidence.recipient and signed_headers.to with the envelope the message arrived in',
     ],
@@ -2640,7 +2845,15 @@ async function selfTest() {
     for (const line of lines) {
       assert(!/[^\x20-\x7E]/.test(line), `war headers must stay ASCII to survive every transport: ${line}`);
     }
-    return `${WAR_SIGNER} / ${WAR_STANDARD}`;
+    // A configured signer replaces the shipped one everywhere, header and body alike.
+    const custom = warTextsFor({ pgpSigner: 'ops@example.test', pgpStandard: 'Test standard' });
+    assert(custom.headerText.includes('ops@example.test'), 'a configured signer must reach the header');
+    assert(custom.noticeText.includes('ops@example.test'), 'a configured signer must reach the body notice');
+    assert(custom.noticeText.split(WAR_MARKER).length - 1 === 1, 'one marker per notice, configured or not');
+    const blank = warTextsFor({ pgpSigner: '   ', pgpStandard: '' });
+    assert(blank.headerText === WAR_HEADER_TEXT, 'an empty setting must fall back, never name nobody');
+    const shown = resolveConfig({});
+    return `${shown.pgpSigner} / ${shown.pgpStandard}`;
   });
 
   record('headers-preserve-existing', () => {
@@ -2785,6 +2998,10 @@ module.exports = {
   WAR_HEADER_TEXT,
   WAR_NOTICE_TEXT,
   WAR_NOTICE_HTML,
+  WAR_DEFAULT_TEXTS,
+  warSafeText,
+  warTexts,
+  warTextsFor,
   appendWarMarker,
   warBodyField,
   withWarNotice,

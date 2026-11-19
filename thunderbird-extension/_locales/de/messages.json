@@ -84,6 +84,58 @@
   "fingerprintIsKeyId": {
     "message": "Das ist eine Schlüssel-ID (8 oder 16 Zeichen), kein Fingerabdruck. Öffnen Sie die Schlüsseleigenschaften und kopieren Sie den vollständigen 40-stelligen Fingerabdruck."
   },
+  "rejectedHeaders": {
+    "message": "Header, die die Erweiterung nicht geschrieben hat (erlaubt sind nur Namen mit X-, List- und msip_labels): $list$",
+    "placeholders": {
+      "list": {
+        "content": "$1"
+      }
+    }
+  },
+  "fingerprintIssueNotHex": {
+    "message": "Erfasst am $at$: Der PGP-Fingerabdruck enthält andere Zeichen als 0-9 und A-F, deshalb wurde keine PGP-Angabe geschrieben.",
+    "placeholders": {
+      "at": {
+        "content": "$1"
+      }
+    }
+  },
+  "fingerprintIssueKeyId": {
+    "message": "Erfasst am $at$: Im Feld für den PGP-Fingerabdruck steht eine Schlüssel-ID, kein Fingerabdruck — deshalb wurde keine PGP-Angabe geschrieben.",
+    "placeholders": {
+      "at": {
+        "content": "$1"
+      }
+    }
+  },
+  "fingerprintIssueWrongLength": {
+    "message": "Erfasst am $at$: Der PGP-Fingerabdruck hat weder 40 noch 64 Hexadezimalzeichen, deshalb wurde keine PGP-Angabe geschrieben.",
+    "placeholders": {
+      "at": {
+        "content": "$1"
+      }
+    }
+  },
+  "restampReasonEvidenceHeader": {
+    "message": "der Nachweis-Header stand bereits in der Nachricht"
+  },
+  "restampReasonManifestAttached": {
+    "message": "das Manifest war bereits angehängt"
+  },
+  "restampsSummary": {
+    "message": "Ein Sendedurchlauf lief $count$ Mal erneut, ohne erneut zu stempeln. Zuletzt: $when$ — $reason$.",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      },
+      "when": {
+        "content": "$2"
+      },
+      "reason": {
+        "content": "$3"
+      }
+    }
+  },
   "labelVersion": {
     "message": "Version"
   },
@@ -108,6 +160,18 @@
   "pgpHint": {
     "message": "z. B. 3F2A9C… (leer lassen, um den Header wegzulassen)"
   },
+  "labelPgpSigner": {
+    "message": "PGP-Signer-Adresse (im WAR-Hinweis genannt)"
+  },
+  "pgpSignerHint": {
+    "message": "z. B. name@example.org (leer lassen für den Standardwert)"
+  },
+  "labelPgpStandard": {
+    "message": "Im WAR-Hinweis genannter Signaturstandard"
+  },
+  "pgpStandardHint": {
+    "message": "z. B. OpenPGP/MIME signed message (RFC 4880 and 3156)"
+  },
   "labelOts": {
     "message": "Jede Nachricht für OpenTimestamps markieren (<code>X-PasevSU-OTS: pending</code>)"
   },
@@ -117,11 +181,92 @@
   "labelDeliveryReceipt": {
     "message": "Für jede Nachricht eine Zustellbestätigung (DSN) anfordern (Thunderbird fügt die DSN-Felder hinzu, <code>RFC 3461</code>)"
   },
+  "labelReceiptMode": {
+    "message": "Woher die Adresse der Bestätigung kommt"
+  },
+  "receiptModeIdentity": {
+    "message": "Die sendende Identität aus dem Profil"
+  },
+  "receiptModeCustom": {
+    "message": "Nur die Adresse unten"
+  },
+  "receiptModeOff": {
+    "message": "Gar keine Adresse für die Bestätigung"
+  },
+  "receiptModeHint": {
+    "message": "das Profil wird bei jedem Senden gelesen, ein neues Konto braucht also keine neue Einstellung"
+  },
   "labelReceiptAddress": {
     "message": "Ausweichadresse für die Lesebestätigung"
   },
   "receiptAddressHint": {
     "message": "wird nur genutzt, wenn Thunderbird die sendende Identität nicht meldet"
+  },
+  "sectionEvidenceChain": {
+    "message": "Identität der Beweiskette"
+  },
+  "evidenceChainNote": {
+    "message": "Diese Namen stehen im gehashten Manifest und in jeder Prüfanweisung, damit eine zweite Installation sagen kann, wer eine Nachricht erzeugt hat, ohne den Code zu ändern."
+  },
+  "labelMessageIdDomain": {
+    "message": "Message-ID-Domain"
+  },
+  "messageIdDomainHint": {
+    "message": "die rechte Seite der Message-ID; der linke Teil wird aus der Evidence-ID abgeleitet"
+  },
+  "labelManifestFilename": {
+    "message": "Dateiname des Manifests"
+  },
+  "manifestFilenameHint": {
+    "message": "der Anhangsname und der Name, auf den jeder Prüfschritt verweist"
+  },
+  "labelManifestFramework": {
+    "message": "Framework-Wort im Manifest"
+  },
+  "manifestFrameworkHint": {
+    "message": "steht im gehashten Manifest; ein Prüfer erkennt daran das Format"
+  },
+  "labelManifestStandard": {
+    "message": "Standard-Wort im Manifest"
+  },
+  "manifestStandardHint": {
+    "message": "benennt das Protokoll des Pakets, z. B. PSEMP"
+  },
+  "labelAlgoBody": {
+    "message": "Hash des Nachrichtentextes"
+  },
+  "algoBodyHint": {
+    "message": "der Hash, den das Manifest für den Nachrichtentext angibt"
+  },
+  "labelAlgoExtra": {
+    "message": "Zusätzliche Hashes"
+  },
+  "algoExtraHint": {
+    "message": "durch Kommas getrennt und als Liste veröffentlicht; leer lassen für keine zusätzlichen Hashes"
+  },
+  "labelAlgoMerkle": {
+    "message": "Merkle-Hash"
+  },
+  "algoMerkleHint": {
+    "message": "der Hash für den Beweisbaum"
+  },
+  "labelAlgoEngine": {
+    "message": "Verschlüsselung des Digest-Blocks"
+  },
+  "algoEngineHint": {
+    "message": "die Verschlüsselung, die für den verschlüsselten Digest-Block angegeben wird"
+  },
+  "labelAlgoSignature": {
+    "message": "Signaturverfahren"
+  },
+  "algoSignatureHint": {
+    "message": "z. B. OpenPGP; wird nur erfasst, nicht von der Erweiterung ausgeführt"
+  },
+  "labelAlgoTimestamp": {
+    "message": "Zeitstempelverfahren"
+  },
+  "algoTimestampHint": {
+    "message": "z. B. OpenTimestamps; wird nur erfasst, nicht von der Erweiterung ausgeführt"
   },
   "save": {
     "message": "Speichern"

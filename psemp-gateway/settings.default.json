@@ -5,8 +5,21 @@
   "organization": "PasevSU",
   "caseId": "",
   "pgpFingerprint": "",
+  "pgpSigner": "pasevdenislav@gmail.com",
+  "pgpStandard": "OpenPGP/MIME signed message (RFC 4880 and 3156)",
   "enableOts": true,
   "enableReceipt": true,
   "enableDeliveryReceipt": true,
-  "receiptAddress": ""
+  "receiptMode": "identity",
+  "receiptAddress": "",
+  "messageIdDomain": "forensic.evidence.pasevsu",
+  "manifestFilename": "PasevSU_Manifest.json",
+  "manifestFramework": "PasevSU",
+  "manifestStandard": "PSEMP",
+  "algoBody": "SHA-256",
+  "algoExtra": "SHA3-512, BLAKE3",
+  "algoMerkle": "SHA-256",
+  "algoEngine": "AES-256-GCM",
+  "algoSignature": "OpenPGP",
+  "algoTimestamp": "OpenTimestamps"
 }

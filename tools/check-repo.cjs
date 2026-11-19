@@ -122,6 +122,32 @@ check('manifest satisfies the MailExtension contract', () => {
   return `${gecko.id}, min ${gecko.strict_min_version}, ${manifest.permissions.length} permissions`;
 });
 
+check('every declared icon exists and is a real PNG', () => {
+  // Gecko accepts a manifest that points at a missing file and then paints an empty
+  // button, so "the archive carries icons" is only true if the files are checked.
+  const declared = new Map();
+  const add = (spec) => {
+    if (!spec || typeof spec !== 'object') return;
+    for (const [size, rel] of Object.entries(spec)) {
+      declared.set(`${size}:${rel}`, { size: Number(size), rel });
+    }
+  };
+  add(manifest.icons);
+  add(manifest.browser_action && manifest.browser_action.default_icon);
+  assert(declared.size > 0, 'the manifest declares no icons');
+  for (const { size, rel } of declared.values()) {
+    const file = path.join(EXT, rel);
+    assert(fs.existsSync(file), `declared icon ${rel} is missing (run tools/make-icons.cjs)`);
+    const png = fs.readFileSync(file);
+    assert(png.subarray(0, 8).toString('hex') === '89504e470d0a1a0a', `${rel} is not a PNG`);
+    assert(png.toString('ascii', 12, 16) === 'IHDR', `${rel} has no IHDR chunk`);
+    const width = png.readUInt32BE(16);
+    const height = png.readUInt32BE(20);
+    assert(width === size && height === size, `${rel} is ${width}x${height}, declared as ${size}`);
+  }
+  return `${declared.size} declared icons, all real PNGs`;
+});
+
 check('every header name is registered in user.js', () => {
   const api = require(path.join(GATEWAY, 'api.js'));
   const names = Object.values(api.HEADER_NAMES);

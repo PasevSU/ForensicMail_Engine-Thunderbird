@@ -1,11 +1,15 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <title data-i18n="optionsTitle">PasevSU Forensic Mail — Options</title>
     <style>
       body {
-        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-family:
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
         margin: 1.5rem;
         max-width: 40rem;
       }
@@ -71,7 +75,8 @@
     <h1 data-i18n="optionsTitle">PasevSU Forensic Mail — Options</h1>
     <p data-i18n-html="optionsIntro">
       These values are written into every outgoing email as
-      <code>X-PasevSU-*</code> headers. Changes apply from the next message you send.
+      <code>X-PasevSU-*</code> headers. Changes apply from the next message you
+      send.
     </p>
 
     <p class="note" id="armed"></p>
@@ -79,8 +84,13 @@
     <p class="note" id="lastSend"></p>
     <p class="note" id="attachFailures"></p>
     <p class="note" id="receiptProblem"></p>
+    <p class="note" id="rejectedHeaders"></p>
+    <p class="note" id="fingerprintIssue"></p>
+    <p class="note" id="restamps"></p>
     <div class="note hidden" id="attachHashesWrap">
-      <span data-i18n="attachmentHashes">Attachment hashes of the last message:</span>
+      <span data-i18n="attachmentHashes"
+        >Attachment hashes of the last message:</span
+      >
       <div id="attachHashes"></div>
     </div>
 
@@ -97,24 +107,52 @@
       <input type="text" id="origin" />
     </div>
     <div class="field">
-      <label for="organization" data-i18n="labelOrganization">Organization</label>
+      <label for="organization" data-i18n="labelOrganization"
+        >Organization</label
+      >
       <input type="text" id="organization" />
     </div>
     <div class="field">
       <label for="caseId" data-i18n="labelCaseId">Case ID</label>
       <input type="text" id="caseId" />
-      <small data-i18n="caseIdHint">e.g. CASE-2026-001 (leave empty to omit the header)</small>
+      <small data-i18n="caseIdHint"
+        >e.g. CASE-2026-001 (leave empty to omit the header)</small
+      >
     </div>
     <div class="field">
-      <label for="pgpFingerprint" data-i18n="labelPgp">PGP Fingerprint (Thunderbird key)</label>
+      <label for="pgpFingerprint" data-i18n="labelPgp"
+        >PGP Fingerprint (Thunderbird key)</label
+      >
       <input type="text" id="pgpFingerprint" />
-      <small data-i18n="pgpHint">e.g. 3F2A9C… (leave empty to omit the header)</small>
+      <small data-i18n="pgpHint"
+        >e.g. 3F2A9C… (leave empty to omit the header)</small
+      >
+    </div>
+    <div class="field">
+      <label for="pgpSigner" data-i18n="labelPgpSigner"
+        >PGP signer address (used in the WAR notice)</label
+      >
+      <input type="text" id="pgpSigner" />
+      <small data-i18n="pgpSignerHint"
+        >e.g. name@example.org (leave empty to use the shipped default)</small
+      >
+    </div>
+    <div class="field">
+      <label for="pgpStandard" data-i18n="labelPgpStandard"
+        >Signature standard named in the WAR notice</label
+      >
+      <input type="text" id="pgpStandard" />
+      <small data-i18n="pgpStandardHint"
+        >e.g. OpenPGP/MIME signed message (RFC 4880 and 3156)</small
+      >
     </div>
 
     <div class="checkbox-field">
       <input type="checkbox" id="enableOts" />
       <label for="enableOts" data-i18n-html="labelOts"
-        >Mark every message for OpenTimestamps (<code>X-PasevSU-OTS: pending</code>)</label
+        >Mark every message for OpenTimestamps (<code
+          >X-PasevSU-OTS: pending</code
+        >)</label
       >
     </div>
 
@@ -129,7 +167,28 @@
     <div class="checkbox-field">
       <input type="checkbox" id="enableDeliveryReceipt" />
       <label for="enableDeliveryReceipt" data-i18n-html="labelDeliveryReceipt"
-        >Ask for a delivery receipt on every message (DSN, <code>RFC 3461</code>)</label
+        >Ask for a delivery receipt on every message (DSN,
+        <code>RFC 3461</code>)</label
+      >
+    </div>
+    <div class="field">
+      <label for="receiptMode" data-i18n="labelReceiptMode"
+        >Where the receipt address comes from</label
+      >
+      <select id="receiptMode">
+        <option value="identity" data-i18n="receiptModeIdentity">
+          The sending identity from the profile
+        </option>
+        <option value="custom" data-i18n="receiptModeCustom">
+          Only the address below
+        </option>
+        <option value="off" data-i18n="receiptModeOff">
+          No receipt address at all
+        </option>
+      </select>
+      <small data-i18n="receiptModeHint"
+        >the profile is read on every send, so a new account needs no new
+        setting</small
       >
     </div>
     <div class="field">
@@ -142,15 +201,109 @@
       >
     </div>
 
+    <h2 data-i18n="sectionEvidenceChain">Evidence chain identity</h2>
+    <p class="note" data-i18n="evidenceChainNote">
+      These names are written into the hashed manifest and into every
+      verification instruction, so a second deployment can say who minted a
+      message without changing code.
+    </p>
+    <div class="field">
+      <label for="messageIdDomain" data-i18n="labelMessageIdDomain"
+        >Message-ID domain</label
+      >
+      <input type="text" id="messageIdDomain" />
+      <small data-i18n="messageIdDomainHint"
+        >the right-hand side of the Message-ID; the local part is derived from
+        the evidence id</small
+      >
+    </div>
+    <div class="field">
+      <label for="manifestFilename" data-i18n="labelManifestFilename"
+        >Manifest file name</label
+      >
+      <input type="text" id="manifestFilename" />
+      <small data-i18n="manifestFilenameHint"
+        >the attachment name and the name every verification step refers
+        to</small
+      >
+    </div>
+    <div class="field">
+      <label for="manifestFramework" data-i18n="labelManifestFramework"
+        >Framework word written in the manifest</label
+      >
+      <input type="text" id="manifestFramework" />
+      <small data-i18n="manifestFrameworkHint"
+        >inside the hashed manifest; a verifier cuts on this name</small
+      >
+    </div>
+    <div class="field">
+      <label for="manifestStandard" data-i18n="labelManifestStandard"
+        >Standard word written in the manifest</label
+      >
+      <input type="text" id="manifestStandard" />
+      <small data-i18n="manifestStandardHint"
+        >names the protocol the package follows, e.g. PSEMP</small
+      >
+    </div>
+    <div class="field">
+      <label for="algoBody" data-i18n="labelAlgoBody">Body digest</label>
+      <input type="text" id="algoBody" />
+      <small data-i18n="algoBodyHint"
+        >the hash the manifest publishes for the message body</small
+      >
+    </div>
+    <div class="field">
+      <label for="algoExtra" data-i18n="labelAlgoExtra">Extra digests</label>
+      <input type="text" id="algoExtra" />
+      <small data-i18n="algoExtraHint"
+        >comma-separated, published as a list; leave empty for no extra
+        hashes</small
+      >
+    </div>
+    <div class="field">
+      <label for="algoMerkle" data-i18n="labelAlgoMerkle">Merkle digest</label>
+      <input type="text" id="algoMerkle" />
+      <small data-i18n="algoMerkleHint"
+        >the hash used for the evidence tree</small
+      >
+    </div>
+    <div class="field">
+      <label for="algoEngine" data-i18n="labelAlgoEngine"
+        >Digest-block cipher</label
+      >
+      <input type="text" id="algoEngine" />
+      <small data-i18n="algoEngineHint"
+        >the cipher named for the encrypted digest block</small
+      >
+    </div>
+    <div class="field">
+      <label for="algoSignature" data-i18n="labelAlgoSignature"
+        >Signature scheme</label
+      >
+      <input type="text" id="algoSignature" />
+      <small data-i18n="algoSignatureHint"
+        >e.g. OpenPGP; recorded, not performed by the extension</small
+      >
+    </div>
+    <div class="field">
+      <label for="algoTimestamp" data-i18n="labelAlgoTimestamp"
+        >Timestamp scheme</label
+      >
+      <input type="text" id="algoTimestamp" />
+      <small data-i18n="algoTimestampHint"
+        >e.g. OpenTimestamps; recorded, not performed by the extension</small
+      >
+    </div>
+
     <button id="save" data-i18n="save">Save</button>
     <span id="status"></span>
 
     <h2 data-i18n="sectionShared">Shared settings file</h2>
     <p data-i18n-html="sharedIntro">
       The gateway keeps the same keys in
-      <code>psemp-gateway/settings.default.json</code>. Import it here so both halves
-      agree on version, framework, organization and PGP fingerprint, and export the
-      current values back to that file when you change them.
+      <code>psemp-gateway/settings.default.json</code>. Import it here so both
+      halves agree on version, framework, organization and PGP fingerprint, and
+      export the current values back to that file when you change them.
     </p>
     <div class="checkbox-field">
       <input type="file" id="importFile" accept=".json,application/json" />
@@ -159,9 +312,9 @@
       </button>
     </div>
     <p class="note" data-i18n-html="originNote">
-      <code>origin</code> is not copied from the file: it names the producer, so the
-      extension always writes <code>Thunderbird</code> and the gateway writes
-      <code>PSEMP-Gateway</code>.
+      <code>origin</code> is not copied from the file: it names the producer, so
+      the extension always writes <code>Thunderbird</code> and the gateway
+      writes <code>PSEMP-Gateway</code>.
     </p>
 
     <p class="note" data-i18n-html="receiptNote">
@@ -170,8 +323,8 @@
     </p>
 
     <p class="note" data-i18n-html="pgpNote">
-      <strong>OpenPGP already configured in Thunderbird.</strong> Put the fingerprint
-      of the key your account already signs with here.
+      <strong>OpenPGP already configured in Thunderbird.</strong> Put the
+      fingerprint of the key your account already signs with here.
     </p>
 
     <p class="note" data-i18n-html="limitationsNote">

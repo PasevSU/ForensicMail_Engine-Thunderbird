@@ -2,7 +2,7 @@
 /*
  * PSEMP shared-settings parity.
  *
- * The two halves of the framework must describe the same ten settings or the user
+ * The two halves of the framework must describe the same settings or the user
  * ends up with a header claiming a framework the other half never wrote. The file
  * `psemp-gateway/settings.default.json` is the meeting point, so this test pins the
  * key set and the key ORDER across four places at once:
@@ -12,7 +12,7 @@
  *   thunderbird-extension/background.js DEFAULTS (what is actually written)
  *   thunderbird-extension/options.js    DEFAULTS (what the options page edits)
  *
- * Importing a settings file must copy the nine shared keys but NOT `origin`: origin names
+ * Importing a settings file must copy every shared key but NOT `origin`: origin names
  * the producer, so the extension always writes `Thunderbird` and the gateway always
  * writes `PSEMP-Gateway`. That single divergence is asserted, not ignored.
  *
@@ -36,10 +36,26 @@ const KEYS = [
   'organization',
   'caseId',
   'pgpFingerprint',
+  'pgpSigner',
+  'pgpStandard',
   'enableOts',
   'enableReceipt',
   'enableDeliveryReceipt',
+  'receiptMode',
   'receiptAddress',
+  // Everything the evidence chain itself says: the Message-ID host, the name and the
+  // two protocol words of the manifest, and the algorithms it publishes. They live in
+  // settings so a second deployment does not have to patch code to say who it is.
+  'messageIdDomain',
+  'manifestFilename',
+  'manifestFramework',
+  'manifestStandard',
+  'algoBody',
+  'algoExtra',
+  'algoMerkle',
+  'algoEngine',
+  'algoSignature',
+  'algoTimestamp',
 ];
 
 const checks = [];
@@ -69,7 +85,6 @@ function loadOptionsPage() {
   const writes = [];
   const blobs = [];
   const stored = {};
-
   function element(id) {
     if (!elements.has(id)) {
       elements.set(id, {
@@ -209,10 +224,13 @@ async function main() {
       'the delivery-receipt switch is on the page and reflects storage',
     );
     assert.strictEqual(page.element('receiptAddress').value, api.DEFAULTS.receiptAddress);
+    assert.strictEqual(page.element('messageIdDomain').value, api.DEFAULTS.messageIdDomain);
+    assert.strictEqual(page.element('manifestFilename').value, api.DEFAULTS.manifestFilename);
+    assert.strictEqual(page.element('algoExtra').value, api.DEFAULTS.algoExtra);
     return 'form reflects storage';
   });
 
-  await check('import-copies-the-nine-keys-but-not-origin', async () => {
+  await check('import-copies-every-shared-key-but-not-origin', async () => {
     const imported = {
       version: '2.5',
       framework: 'Forensic-Mail',
@@ -220,10 +238,22 @@ async function main() {
       organization: 'PasevSU',
       caseId: 'CASE-2026-001',
       pgpFingerprint: 'a1b2 c3d4: e5f6',
+      pgpSigner: '  other@example.org  ',
+      pgpStandard: '  OpenPGP/MIME  ',
       enableOts: false,
       enableReceipt: false,
       enableDeliveryReceipt: false,
       receiptAddress: '  receipts@example.org  ',
+      messageIdDomain: '  evidence.example.test  ',
+      manifestFilename: '  /Evidence/Manifest.json  ',
+      manifestFramework: '  OtherFramework  ',
+      manifestStandard: '  OTHER-STD  ',
+      algoBody: '  SHA-512  ',
+      algoExtra: '  SHA3-512 ,  BLAKE3  ',
+      algoMerkle: '  SHA-512  ',
+      algoEngine: '  AES-256-GCM  ',
+      algoSignature: '  OpenPGP  ',
+      algoTimestamp: '  OpenTimestamps  ',
     };
     page.element('importFile').files = [{ text: async () => JSON.stringify(imported) }];
     page.handlers.get('importFile:change')({ target: page.element('importFile') });
@@ -233,6 +263,8 @@ async function main() {
     assert.ok(!Object.prototype.hasOwnProperty.call(written, 'origin'), 'origin must never be imported');
     assert.strictEqual(written.version, '2.5');
     assert.strictEqual(written.pgpFingerprint, 'A1B2C3D4E5F6', 'the fingerprint is normalized on import');
+    assert.strictEqual(written.pgpSigner, 'other@example.org', 'the signer travels with the settings file');
+    assert.strictEqual(written.pgpStandard, 'OpenPGP/MIME', 'the standard travels with the settings file');
     assert.strictEqual(written.enableOts, false);
     assert.strictEqual(written.enableReceipt, false, 'the receipt switch travels with the settings file');
     assert.strictEqual(
@@ -242,6 +274,24 @@ async function main() {
     );
     assert.strictEqual(written.caseId, 'CASE-2026-001', 'caseId used to be dropped on import');
     assert.strictEqual(written.receiptAddress, 'receipts@example.org', 'the address is trimmed');
+    assert.strictEqual(
+      written.messageIdDomain,
+      'evidence.example.test',
+      'the Message-ID host travels with the settings file',
+    );
+    assert.strictEqual(
+      written.manifestFilename,
+      '/Evidence/Manifest.json',
+      'the manifest name travels with the settings file',
+    );
+    assert.strictEqual(written.manifestFramework, 'OtherFramework');
+    assert.strictEqual(written.manifestStandard, 'OTHER-STD');
+    assert.strictEqual(written.algoBody, 'SHA-512', 'the published digest travels with the settings file');
+    assert.strictEqual(written.algoExtra, 'SHA3-512 ,  BLAKE3', 'only the outer whitespace is trimmed');
+    assert.strictEqual(written.algoMerkle, 'SHA-512');
+    assert.strictEqual(written.algoEngine, 'AES-256-GCM');
+    assert.strictEqual(written.algoSignature, 'OpenPGP');
+    assert.strictEqual(written.algoTimestamp, 'OpenTimestamps');
     assert.strictEqual(page.element('version').value, '2.5', 'the form is refreshed after import');
     return 'origin stripped, fingerprint normalized';
   });
@@ -267,6 +317,63 @@ async function main() {
     assert.match(page.element('status').textContent, /Not a settings file/);
     assert.strictEqual(page.writes.length, before, 'a broken file must not touch storage');
     return 'parse error reported, nothing written';
+  });
+
+  // background.js has always recorded these four conditions and the page never
+  // showed them, so a dropped header or an omitted PGP claim was invisible. The
+  // fixture seeds exactly what the background script writes — codes, not sentences
+  // — and asserts the page turns them into readable text.
+  const healthPage = loadOptionsPage();
+  Object.assign(healthPage.stored, {
+    psempRejectedHeaders: ['X-Evidence-Salt', 'List-Case'],
+    psempFingerprintIssue: 'key-id-not-fingerprint',
+    psempFingerprintIssueAt: '2026-11-09T10:20:30.000Z',
+    psempRestamps: 2,
+    psempLastRestamp: { at: '2026-11-09T10:21:00.000Z', reason: 'manifest-attached' },
+  });
+  healthPage.handlers.get('document:DOMContentLoaded')();
+  await settle(() => healthPage.element('rejectedHeaders').textContent !== '', 'the health block to render');
+
+  await check('the-page-shows-the-headers-the-extension-dropped', () => {
+    const text = healthPage.element('rejectedHeaders').textContent;
+    assert.match(text, /refused to write/, 'the page names the dropped headers');
+    assert.match(text, /X-Evidence-Salt, List-Case/, 'both dropped names are listed in recorded order');
+    return 'dropped header names rendered';
+  });
+
+  await check('the-page-explains-why-the-pgp-claim-was-omitted', () => {
+    const text = healthPage.element('fingerprintIssue').textContent;
+    assert.match(text, /key ID, not a fingerprint/, 'the stored code is mapped to a sentence');
+    assert.match(text, /2026-11-09T10:20:30\.000Z/, 'the recorded moment is shown verbatim');
+    assert.ok(!/key-id-not-fingerprint/.test(text), 'the internal code never reaches the page');
+    return 'fingerprint issue rendered from its code';
+  });
+
+  await check('the-page-counts-the-send-passes-that-did-not-restamp', () => {
+    const text = healthPage.element('restamps').textContent;
+    assert.match(text, /re-ran 2 time/, 'the recorded count is shown');
+    assert.match(text, /2026-11-09T10:21:00\.000Z/, 'the last restamp moment is shown');
+    assert.match(
+      text,
+      /the manifest was already attached/,
+      'the reason code becomes the sentence for it',
+    );
+    assert.ok(!/manifest-attached/.test(text), 'the internal reason code never reaches the page');
+    return 'restamps rendered from count + reason code';
+  });
+
+  await check('a-clean-profile-renders-no-invented-warning', async () => {
+    const clean = loadOptionsPage();
+    clean.handlers.get('document:DOMContentLoaded')();
+    await settle(() => clean.element('version').value !== '', 'the clean page to load');
+    for (const id of ['rejectedHeaders', 'fingerprintIssue', 'restamps']) {
+      assert.strictEqual(
+        clean.element(id).textContent,
+        '',
+        `${id} must stay empty when the background script recorded nothing`,
+      );
+    }
+    return 'nothing recorded, nothing claimed';
   });
 
   console.log('settings-parity:');

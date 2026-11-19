@@ -163,8 +163,14 @@ These are platform limits of MailExtensions (Thunderbird 115), not missing featu
 thunderbird-extension/        the MailExtension (loaded by Thunderbird, no build step)
   manifest.json               MV2, id pasevsu-forensic-headers@pasev.example, min TB 115.0
   background.js               compose.onBeforeSend -> digests -> Merkle root -> headers
-  options.html / options.js   settings: version, caseId, pgpFingerprint, enableOts,
-                              enableReceipt (MDN), enableDeliveryReceipt (DSN), receiptAddress
+  options.html / options.js   every setting the add-on reads: the chain identity
+                              (version, caseId, messageIdDomain, manifestFilename,
+                              manifestFramework, manifestStandard), the published
+                              algorithms (algoBody, algoExtra, algoMerkle, algoEngine,
+                              algoSignature, algoTimestamp), the signer wording
+                              (pgpSigner, pgpStandard, pgpFingerprint) and the two
+                              receipts (enableReceipt/MDN, enableDeliveryReceipt/DSN,
+                              receiptMode, receiptAddress) — 23 keys in all
   user.js                     the 27 names, for mail.compose.other.header
   _locales/{en,bg,de}/        UI strings
   tools/install.ps1           build .xpi + install + register names (Windows)
@@ -212,7 +218,7 @@ docs/                         CLI reference, verification walkthrough, threat mo
 
 ## Privacy
 
-The add-on sends **nothing** anywhere. It computes digests locally, stores five settings in `thunderbird.storage.local`, and writes headers into the message you were already sending. There is no analytics, no telemetry, no update check and no remote endpoint of any kind.
+The add-on sends **nothing** anywhere. It computes digests locally, stores twenty-three settings in `thunderbird.storage.local`, and writes headers into the message you were already sending. There is no analytics, no telemetry, no update check and no remote endpoint of any kind.
 
 What the headers *do* disclose to every recipient is deliberate, and worth understanding before you rely on them: a per-message evidence id, digests of your body and files, an optional case label, an optional PGP fingerprint. Read [`PRIVACY.md`](PRIVACY.md) before using this where a case label itself is sensitive.
 

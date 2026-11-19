@@ -60,11 +60,53 @@ function referenceMerkle(hexLeaves) {
 }
 
 /**
+ * The `browser.identities` API (behind the optional `accountsRead` permission).
+ *
+ * A real profile has an identity per account, so the extension asks the profile for
+ * the sending address instead of trusting a hard-coded one. The stub stays ABSENT by
+ * default: a build whose permission was not granted must still send, so every fixture
+ * that does not ask for identities keeps exercising exactly that path.
+ *
+ *   identities: { default: { id, email, name, accountId }, byId: { id9: { … } } }
+ */
+function identitiesStub(spec, order) {
+  const byId = Object.assign({}, spec.byId || {});
+  const fallback = spec.default ? [spec.default] : [];
+  const all = () => {
+    const entries = Object.values(byId);
+    for (const entry of fallback) {
+      if (!entries.some((known) => known.id === entry.id)) entries.push(entry);
+    }
+    return entries;
+  };
+
+  return {
+    async list(accountId) {
+      order.push('identities.list');
+      return all()
+        .filter((entry) => !accountId || entry.accountId === accountId)
+        .map((entry) => Object.assign({}, entry));
+    },
+    async get(id) {
+      order.push('identities.get');
+      const entry = all().find((known) => known.id === id);
+      if (!entry) throw new Error(`no such identity ${id}`);
+      return Object.assign({}, entry);
+    },
+    async getDefault(accountId) {
+      order.push('identities.getDefault');
+      return all().find((entry) => !accountId || entry.accountId === accountId);
+    },
+  };
+}
+
+/**
  * Load background.js into a fresh context.
  * @param {{stored?: object, attachments?: object, storageGetThrows?: boolean,
- *          addAttachmentThrows?: Error|null, listed?: Array<object>|null}} options
+ *          addAttachmentThrows?: Error|null, listed?: Array<object>|null,
+ *          noRuntime?: boolean, identities?: object|null}} options
  */
-function loadExtension({ stored = {}, attachments = {}, storageGetThrows = false, addAttachmentThrows = null, listed = null, noRuntime = false } = {}) {
+function loadExtension({ stored = {}, attachments = {}, storageGetThrows = false, addAttachmentThrows = null, listed = null, noRuntime = false, identities = null } = {}) {
   const order = [];
   const listeners = [];
   const writes = {};
@@ -131,6 +173,8 @@ function loadExtension({ stored = {}, attachments = {}, storageGetThrows = false
         },
       },
     },
+    // Absent unless the fixture asks for it — see identitiesStub().
+    ...(identities ? { identities: identitiesStub(identities, order) } : {}),
   };
 
   const context = vm.createContext({

@@ -84,6 +84,58 @@
   "fingerprintIsKeyId": {
     "message": "That is a key ID (8 or 16 characters), not a fingerprint. Open the key properties and copy the full 40-character fingerprint."
   },
+  "rejectedHeaders": {
+    "message": "Headers the extension refused to write (only X-, List- and msip_labels names are allowed): $list$",
+    "placeholders": {
+      "list": {
+        "content": "$1"
+      }
+    }
+  },
+  "fingerprintIssueNotHex": {
+    "message": "Recorded at $at$: the PGP fingerprint contains characters other than 0-9 and A-F, so no PGP claim was written.",
+    "placeholders": {
+      "at": {
+        "content": "$1"
+      }
+    }
+  },
+  "fingerprintIssueKeyId": {
+    "message": "Recorded at $at$: the PGP fingerprint field holds a key ID, not a fingerprint, so no PGP claim was written.",
+    "placeholders": {
+      "at": {
+        "content": "$1"
+      }
+    }
+  },
+  "fingerprintIssueWrongLength": {
+    "message": "Recorded at $at$: the PGP fingerprint is neither 40 nor 64 hexadecimal characters, so no PGP claim was written.",
+    "placeholders": {
+      "at": {
+        "content": "$1"
+      }
+    }
+  },
+  "restampReasonEvidenceHeader": {
+    "message": "the evidence header was already in the message"
+  },
+  "restampReasonManifestAttached": {
+    "message": "the manifest was already attached"
+  },
+  "restampsSummary": {
+    "message": "A send pass re-ran $count$ time(s) without stamping again. Last: $when$ — $reason$.",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      },
+      "when": {
+        "content": "$2"
+      },
+      "reason": {
+        "content": "$3"
+      }
+    }
+  },
   "labelVersion": {
     "message": "Version"
   },
@@ -108,6 +160,18 @@
   "pgpHint": {
     "message": "e.g. 3F2A9C… (leave empty to omit the header)"
   },
+  "labelPgpSigner": {
+    "message": "PGP signer address (named in the WAR notice)"
+  },
+  "pgpSignerHint": {
+    "message": "e.g. name@example.org (leave empty to use the shipped default)"
+  },
+  "labelPgpStandard": {
+    "message": "Signature standard named in the WAR notice"
+  },
+  "pgpStandardHint": {
+    "message": "e.g. OpenPGP/MIME signed message (RFC 4880 and 3156)"
+  },
   "labelOts": {
     "message": "Mark every message for OpenTimestamps (<code>X-PasevSU-OTS: pending</code>)"
   },
@@ -117,11 +181,92 @@
   "labelDeliveryReceipt": {
     "message": "Request a delivery receipt on every message (Thunderbird adds the DSN fields, <code>RFC 3461</code>)"
   },
+  "labelReceiptMode": {
+    "message": "Where the receipt address comes from"
+  },
+  "receiptModeIdentity": {
+    "message": "The sending identity from the profile"
+  },
+  "receiptModeCustom": {
+    "message": "Only the address below"
+  },
+  "receiptModeOff": {
+    "message": "No receipt address at all"
+  },
+  "receiptModeHint": {
+    "message": "the profile is read on every send, so a new account needs no new setting"
+  },
   "labelReceiptAddress": {
     "message": "Fallback receipt address"
   },
   "receiptAddressHint": {
     "message": "only used when Thunderbird does not report the sending identity"
+  },
+  "sectionEvidenceChain": {
+    "message": "Evidence chain identity"
+  },
+  "evidenceChainNote": {
+    "message": "These names are written into the hashed manifest and into every verification instruction, so a second deployment can say who minted a message without changing code."
+  },
+  "labelMessageIdDomain": {
+    "message": "Message-ID domain"
+  },
+  "messageIdDomainHint": {
+    "message": "the right-hand side of the Message-ID; the local part is derived from the evidence id"
+  },
+  "labelManifestFilename": {
+    "message": "Manifest file name"
+  },
+  "manifestFilenameHint": {
+    "message": "the attachment name and the name every verification step refers to"
+  },
+  "labelManifestFramework": {
+    "message": "Framework word written in the manifest"
+  },
+  "manifestFrameworkHint": {
+    "message": "inside the hashed manifest; a verifier cuts on this name"
+  },
+  "labelManifestStandard": {
+    "message": "Standard word written in the manifest"
+  },
+  "manifestStandardHint": {
+    "message": "names the protocol the package follows, e.g. PSEMP"
+  },
+  "labelAlgoBody": {
+    "message": "Body digest"
+  },
+  "algoBodyHint": {
+    "message": "the hash the manifest publishes for the message body"
+  },
+  "labelAlgoExtra": {
+    "message": "Extra digests"
+  },
+  "algoExtraHint": {
+    "message": "comma-separated, published as a list; leave empty for no extra hashes"
+  },
+  "labelAlgoMerkle": {
+    "message": "Merkle digest"
+  },
+  "algoMerkleHint": {
+    "message": "the hash used for the evidence tree"
+  },
+  "labelAlgoEngine": {
+    "message": "Digest-block cipher"
+  },
+  "algoEngineHint": {
+    "message": "the cipher named for the encrypted digest block"
+  },
+  "labelAlgoSignature": {
+    "message": "Signature scheme"
+  },
+  "algoSignatureHint": {
+    "message": "e.g. OpenPGP; recorded, not performed by the extension"
+  },
+  "labelAlgoTimestamp": {
+    "message": "Timestamp scheme"
+  },
+  "algoTimestampHint": {
+    "message": "e.g. OpenTimestamps; recorded, not performed by the extension"
   },
   "save": {
     "message": "Save"

@@ -46,6 +46,11 @@ const DEFAULTS = {
   organization: "PasevSU",
   caseId: "",
   pgpFingerprint: "",
+  // The wording of the WAR notice is generated from these two values, so a different
+  // operator or a rotated key never needs a code change. The shipped values are only
+  // the starting point of a fresh install; both are editable in the options page.
+  pgpSigner: "pasevdenislav@gmail.com",
+  pgpStandard: "OpenPGP/MIME signed message (RFC 4880 and 3156)",
   // On by default: every message is marked for the gateway so nothing has to be
   // remembered per message. Untick it in the options page to stop marking.
   enableOts: true,
@@ -58,7 +63,39 @@ const DEFAULTS = {
   // the *server* reports delivery or failure, the recipient is never asked. Both
   // are switched on independently so either one can be turned off on its own.
   enableDeliveryReceipt: true,
+  // Where the two receipt addresses come from. The profile is the source of truth:
+  // "identity" asks Thunderbird which identity the message is sent from, so a new
+  // account or a switched identity needs no new settings; "custom" uses only
+  // `receiptAddress`; "off" asks for no receipt at all, whatever the two switches
+  // above say. Anything unrecognised falls back to "identity".
+  receiptMode: "identity",
   receiptAddress: "",
+  // The right-hand side of every Message-ID. The left-hand side is derived from the
+  // evidence id, so only the domain can be chosen — but it IS a choice: it names the
+  // organisation that minted the identifier, and a second deployment must be able to
+  // say so instead of borrowing this one's domain.
+  messageIdDomain: "forensic.evidence.pasevsu",
+  // The file name the manifest is attached under, and the name every verification
+  // instruction refers to. Not cosmetic: `alreadyStamped` uses it to recognise its own
+  // attachment on a re-fired pass, so a renamed manifest that this value did not follow
+  // would be hashed as if the user had attached it.
+  manifestFilename: "PasevSU_Manifest.json",
+  // The two protocol discriminators written INSIDE the hashed manifest and the
+  // provenance block. A verifier cuts on these names, so they stay PSEMP by default;
+  // they are settings only so a forked protocol does not need a patch to say its name.
+  manifestFramework: "PasevSU",
+  manifestStandard: "PSEMP",
+  // The `algorithms` block the manifest publishes, one setting per field it contains.
+  // The defaults are the hashes and ciphers this build really uses, so an untouched
+  // install records exactly what runs. `algoExtra` is a comma-separated list because the
+  // manifest needs it as an ARRAY (`extra: ["SHA3-512", "BLAKE3"]`) and a form field can
+  // only hold one line.
+  algoBody: "SHA-256",
+  algoExtra: "SHA3-512, BLAKE3",
+  algoMerkle: "SHA-256",
+  algoEngine: "AES-256-GCM",
+  algoSignature: "OpenPGP",
+  algoTimestamp: "OpenTimestamps",
 };
 
 const MANIFEST_FILENAME = "PasevSU_Manifest.json";
@@ -83,8 +120,20 @@ const MANIFEST_FILENAME = "PasevSU_Manifest.json";
  * and a forensic header that can be false is worth nothing.
  */
 const WAR_MARKER = "{{ PasevSU-WAR }}";
+
+/*
+ * The signer and the signature standard are SHIPPED DEFAULTS, not constants carved
+ * in stone: both are settings (`pgpSigner`, `pgpStandard`) so a different operator,
+ * a different mailbox or a moved PGP key never needs a code change. The values below
+ * are only what a fresh install starts with — Thunderbird's own OpenPGP identity is
+ * per-account, so the address here has to be editable from the options page.
+ */
 const WAR_SIGNER = "pasevdenislav@gmail.com";
 const WAR_STANDARD = "OpenPGP/MIME signed message (RFC 4880 and 3156)";
+
+const WAR_PROOF =
+  `Only that signature proves our identity and preserves the integrity of the message.`;
+const WAR_FORBIDDEN = `FORWARDING THIS EMAIL IS STRICTLY FORBIDDEN.`;
 
 /*
  * The three sentences below are the whole statement, and they are the CONTRACT.
@@ -92,37 +141,65 @@ const WAR_STANDARD = "OpenPGP/MIME signed message (RFC 4880 and 3156)";
  * WAR_NOTICE_TEXT and WAR_NOTICE_HTML — tests/extension-arming.cjs fails otherwise.
  * Keeping them as separate sentences means the plain-text notice and the HTML
  * notice can never drift apart in wording, only in markup.
+ *
+ * Every value is produced by one function so the *same* generator serves both the
+ * shipped default (the constants) and a configured signer: an override can change
+ * the wording, it can never change the structure that the verifier cuts on.
+ *
+ * This block must stay self-contained. extension-arming.cjs compiles exactly the
+ * slice of source that starts at the WAR marker constant and ends at the hashing
+ * helpers, in an empty context, then compares the result with psemp-gateway/api.js,
+ * so nothing here may call a helper defined further down the file. That also means
+ * the two anchor names must not appear verbatim in any comment inside the block.
  */
-const WAR_NO_SIGNATURE =
-  `An email that does not carry the ${WAR_STANDARD} signature made with the PGP ` +
-  `key registered to ${WAR_SIGNER} is not ours.`;
-const WAR_PROOF =
-  `Only that signature proves our identity and preserves the integrity of the message.`;
-const WAR_FORBIDDEN = `FORWARDING THIS EMAIL IS STRICTLY FORBIDDEN.`;
+function warSafeText(value) {
+  return String(value == null ? "" : value).replace(/[\r\n]+/g, " ").trim();
+}
 
-/* One line, no CR/LF, ASCII only: it has to survive every transport unchanged. */
-const WAR_HEADER_TEXT =
-  `${WAR_NO_SIGNATURE} ${WAR_PROOF} FORWARDING THIS EMAIL IS STRICTLY FORBIDDEN ` +
-  `AND IS STATED EXPLICITLY IN THE EMAIL BODY. ${WAR_MARKER}`;
+function warTexts(signer, standard) {
+  const who = warSafeText(signer) || WAR_SIGNER;
+  const std = warSafeText(standard) || WAR_STANDARD;
+  const noSignature =
+    `An email that does not carry the ${std} signature made with the PGP ` +
+    `key registered to ${who} is not ours.`;
+  return {
+    /* One line, no CR/LF, ASCII only: it has to survive every transport unchanged. */
+    headerText:
+      `${noSignature} ${WAR_PROOF} FORWARDING THIS EMAIL IS STRICTLY FORBIDDEN ` +
+      `AND IS STATED EXPLICITLY IN THE EMAIL BODY. ${WAR_MARKER}`,
+    /*
+     * Exact suffix of every outgoing plain-text body. A verifier reproduces
+     * X-PasevSU-Body-SHA256 by removing this whole value with `endsWith`, never by
+     * searching for a substring — the marker alone is not a safe cut point, because an
+     * authored body is allowed to contain the marker too.
+     */
+    noticeText: `\n\n${WAR_MARKER}\n${noSignature}\n${WAR_PROOF}\n${WAR_FORBIDDEN}\n`,
+    /* Same wording, markup only: same signer as a mailto link, same prohibition. */
+    noticeHtml:
+      `<div class="pasevsu-war" data-pasevsu-war="1" style="margin-top:16px;` +
+      `padding-top:8px;border-top:1px solid #999;font-size:smaller">` +
+      `<p><strong>${WAR_MARKER}</strong></p>` +
+      `<p>An email that does not carry the ${std} signature made with the ` +
+      `PGP key registered to <a href="mailto:${who}">${who}</a> is not ` +
+      `ours. ${WAR_PROOF}</p>` +
+      `<p><strong>${WAR_FORBIDDEN}</strong></p></div>`,
+  };
+}
 
-/*
- * Exact suffix of every outgoing plain-text body. A verifier reproduces
- * X-PasevSU-Body-SHA256 by removing this whole constant with `endsWith`, never by
- * searching for a substring — the marker alone is not a safe cut point, because an
- * authored body is allowed to contain the marker too.
- */
-const WAR_NOTICE_TEXT =
-  `\n\n${WAR_MARKER}\n${WAR_NO_SIGNATURE}\n${WAR_PROOF}\n${WAR_FORBIDDEN}\n`;
+/* The shipped wording, byte-identical to what psemp-gateway/api.js quotes. */
+const WAR_DEFAULT_TEXTS = warTexts(WAR_SIGNER, WAR_STANDARD);
+const WAR_NO_SIGNATURE = `An email that does not carry the ${WAR_STANDARD} signature made with the PGP key registered to ${WAR_SIGNER} is not ours.`;
+const WAR_HEADER_TEXT = WAR_DEFAULT_TEXTS.headerText;
+const WAR_NOTICE_TEXT = WAR_DEFAULT_TEXTS.noticeText;
+const WAR_NOTICE_HTML = WAR_DEFAULT_TEXTS.noticeHtml;
 
-/* Same wording, markup only: same signer as a mailto link, same prohibition. */
-const WAR_NOTICE_HTML =
-  `<div class="pasevsu-war" data-pasevsu-war="1" style="margin-top:16px;` +
-  `padding-top:8px;border-top:1px solid #999;font-size:smaller">` +
-  `<p><strong>${WAR_MARKER}</strong></p>` +
-  `<p>An email that does not carry the ${WAR_STANDARD} signature made with the ` +
-  `PGP key registered to <a href="mailto:${WAR_SIGNER}">${WAR_SIGNER}</a> is not ` +
-  `ours. ${WAR_PROOF}</p>` +
-  `<p><strong>${WAR_FORBIDDEN}</strong></p></div>`;
+/* The configured wording for one stored settings object. */
+function warTextsFor(config) {
+  return warTexts(
+    config && config.pgpSigner,
+    config && config.pgpStandard
+  );
+}
 
 function hexFromBuffer(buffer) {
   return Array.from(new Uint8Array(buffer))
@@ -410,10 +487,22 @@ async function encryptDigestBlock(code, rows, merkleRootHex) {
 }
 
 /*
+ * The right-hand side of every Message-ID, taken from the setting `messageIdDomain`.
+ * A stored setting is user input, so anything that would break the `<local@host>`
+ * shape is dropped here rather than producing a header no parser can read back. An
+ * empty result falls back to the shipped domain, because a Message-ID without a host
+ * is not a Message-ID.
+ */
+function messageIdHost(value) {
+  const host = sanitizeHeaderValue(value).replace(/[<>\s@]/g, "");
+  return host || DEFAULTS.messageIdDomain;
+}
+
+/*
  * A long Message-ID with non-standard (but RFC 5322 dot-atom legal) characters
  * `+ _ ~`, so a PasevSU message is trivially recognisable in any mail store.
  */
-async function buildMessageId(evidenceId, timestamp) {
+async function buildMessageId(evidenceId, timestamp, domain) {
   const stamp = String(timestamp || "")
     .replace(/[^0-9]/g, "")
     .slice(0, 14)
@@ -423,7 +512,7 @@ async function buildMessageId(evidenceId, timestamp) {
   );
   const slug = (offset, length) => seed.slice(offset, offset + length);
   const local = `PasevSU.${stamp}.${evidenceId}+${slug(8, 6)}_${slug(14, 6)}~${slug(20, 6)}.${slug(26, 6)}`;
-  return `<${local}@forensic.evidence.pasevsu>`;
+  return `<${local}@${messageIdHost(domain)}>`;
 }
 
 /*
@@ -449,24 +538,30 @@ const REPLAY_DEFAULTS = {
   windowSize: 4096,
 };
 
-// Same literals as the gateway so `algorithms` reads the same in both manifests.
-// SHA3-512 / BLAKE3 are listed as the gateway's sealing step — Web Crypto has
-// neither, so this extension states them and the gateway fills them in.
-function buildAlgorithms() {
+// The manifest repeats the algorithms this build uses, one setting per field it
+// publishes. SHA3-512 / BLAKE3 are listed as the gateway's sealing step — Web Crypto
+// has neither, so this extension states them and the gateway fills them in. `extra` is
+// an ARRAY in the manifest, so the stored one-line list is split on commas here; an
+// empty setting produces an empty array rather than a list containing one blank name.
+function buildAlgorithms(config) {
+  const extra = String((config && config.algoExtra) || "")
+    .split(",")
+    .map((entry) => sanitizeHeaderValue(entry))
+    .filter(Boolean);
   return {
-    body: "SHA-256",
-    extra: ["SHA3-512", "BLAKE3"],
-    merkle: "SHA-256",
-    engine: "AES-256-GCM",
-    signature: "OpenPGP",
-    timestamp: "OpenTimestamps",
+    body: sanitizeHeaderValue(config && config.algoBody) || DEFAULTS.algoBody,
+    extra,
+    merkle: sanitizeHeaderValue(config && config.algoMerkle) || DEFAULTS.algoMerkle,
+    engine: sanitizeHeaderValue(config && config.algoEngine) || DEFAULTS.algoEngine,
+    signature: sanitizeHeaderValue(config && config.algoSignature) || DEFAULTS.algoSignature,
+    timestamp: sanitizeHeaderValue(config && config.algoTimestamp) || DEFAULTS.algoTimestamp,
   };
 }
 
-function buildProvenance({ recipient, messageId, evidenceId, issuedAt, organization }) {
+function buildProvenance({ recipient, messageId, evidenceId, issuedAt, organization, framework, standard }) {
   return {
-    framework: "PasevSU",
-    standard: "PSEMP",
+    framework: sanitizeHeaderValue(framework) || DEFAULTS.manifestFramework,
+    standard: sanitizeHeaderValue(standard) || DEFAULTS.manifestStandard,
     organization: sanitizeHeaderValue(organization),
     evidence_id: sanitizeHeaderValue(evidenceId),
     recipient: sanitizeHeaderValue(recipient),
@@ -608,7 +703,7 @@ async function buildManifest(
 ) {
   const context = extra || {};
   const manifest = {
-    framework: "PasevSU",
+    framework: sanitizeHeaderValue(config.manifestFramework) || DEFAULTS.manifestFramework,
     version: sanitizeHeaderValue(config.version),
     message_sha256: bodyHash,
     // Web Crypto has no SHA3-512, so the MailExtension cannot fill these in; the
@@ -631,7 +726,7 @@ async function buildManifest(
      * it. They are covered instead by X-PasevSU-Manifest-SHA256, which is computed
      * over this whole document.
      */
-    algorithms: buildAlgorithms(),
+    algorithms: buildAlgorithms(config),
     provenance: context.provenance,
     signed_headers: context.signedHeaders,
     replay: context.replay,
@@ -778,13 +873,14 @@ function warBodyField(details) {
  * instead of stacking a second footer. The flavour follows isPlainText/the field:
  * a plain-text composer must never receive HTML tags in its text.
  */
-function withWarNotice(details, field) {
+function withWarNotice(details, field, war) {
   const value = details[field];
   if (typeof value !== "string" || value.includes(WAR_MARKER)) {
     return null;
   }
+  const texts = war || WAR_DEFAULT_TEXTS;
   const plain = details.isPlainText === true || field === "plainTextBody";
-  return plain ? `${value}${WAR_NOTICE_TEXT}` : `${value}${WAR_NOTICE_HTML}`;
+  return plain ? `${value}${texts.noticeText}` : `${value}${texts.noticeHtml}`;
 }
 
 // An MDN address may arrive as "Name <a@b>" or as { email } / { id }.
@@ -801,12 +897,87 @@ function addressOf(value) {
 /*
  * Where both receipt requests point: the identity the message is actually sent
  * from wins, because that is the mailbox the recipient's client and the receiving
- * server will answer. The configured `receiptAddress` is the fallback for a
- * snapshot that has no `from`. The same address is reused for the read receipt
- * (MDN, RFC 8098) and the delivery receipt (DSN, RFC 3461).
+ * server will answer. A snapshot is not always enough — Thunderbird leaves `from`
+ * empty for some account setups — so the PROFILE is asked as well. Nothing here is
+ * hard-coded: a new account, a renamed address or a switched identity is picked up
+ * on the next send. The same address is reused for the read receipt (MDN, RFC 8098)
+ * and the delivery receipt (DSN, RFC 3461).
+ *
+ * The three modes are the user's choice, not the code's:
+ *   "identity" (default) — profile first, `receiptAddress` as the last resort
+ *   "custom"             — `receiptAddress` first, the sending identity as the last resort
+ *   "off"                — no address at all, so no receipt is requested
  */
-function resolveReceiptAddress(config, details) {
-  return addressOf(details.from) || addressOf(config.receiptAddress);
+const RECEIPT_MODES = ["identity", "custom", "off"];
+
+/* Storage is editable from three directions (options page, imported file, gateway),
+ * so an unknown mode must not silently mean "ask for no receipt". */
+function normalizeReceiptMode(value) {
+  return RECEIPT_MODES.indexOf(value) === -1 ? "identity" : value;
+}
+
+/* The profile API, but only when the optional `accountsRead` permission was granted.
+ * Without the guard a denied permission would throw inside onBeforeSend and take the
+ * whole send down with it. */
+function identitiesApi() {
+  const api = typeof browser === "object" && browser ? browser.identities : null;
+  return api && typeof api === "object" ? api : null;
+}
+
+/* One identity from the profile. Silence on failure on purpose: a send must never
+ * fail because the profile could not be read. */
+async function identityAddress(id) {
+  const api = identitiesApi();
+  if (!id || !api || typeof api.get !== "function") {
+    return "";
+  }
+  try {
+    return addressOf(await api.get(id));
+  } catch (error) {
+    return "";
+  }
+}
+
+/* The default identity, for a snapshot that names neither an identity nor a sender. */
+async function defaultIdentityAddress() {
+  const api = identitiesApi();
+  if (!api) {
+    return "";
+  }
+  try {
+    if (typeof api.getDefault === "function") {
+      const address = addressOf(await api.getDefault());
+      if (address) {
+        return address;
+      }
+    }
+    if (typeof api.list === "function") {
+      const list = await api.list();
+      const first = Array.isArray(list) && list.length ? list[0] : null;
+      return first ? addressOf(first) : "";
+    }
+  } catch (error) {
+    return "";
+  }
+  return "";
+}
+
+async function resolveReceiptAddress(config, details) {
+  const mode = normalizeReceiptMode(config.receiptMode);
+  if (mode === "off") {
+    return "";
+  }
+  const configured = addressOf(config.receiptAddress);
+  const snapshot = addressOf(details.from);
+  if (mode === "custom") {
+    return configured || snapshot;
+  }
+  return (
+    snapshot ||
+    (await identityAddress(details.identityId)) ||
+    (await defaultIdentityAddress()) ||
+    configured
+  );
 }
 
 async function buildHeaders(config, evidenceId, bodyHash, attachmentEntries, merkle, manifestHash, extra) {
@@ -821,8 +992,11 @@ async function buildHeaders(config, evidenceId, bodyHash, attachmentEntries, mer
   headers.push(buildHeader("X-PasevSU-Origin", config.origin));
   headers.push(buildHeader("X-PasevSU-Organization", config.organization));
   // Mandatory identity + no-forwarding statement. Always present, never a setting:
-  // "винаги да се вписва" — a message without it is not a PasevSU message.
-  headers.push(buildHeader("X-PasevSU-WAR", WAR_HEADER_TEXT));
+  // "винаги да се вписва" — a message without it is not a PasevSU message. The
+  // WORDING, however, is a setting (`pgpSigner` / `pgpStandard`): a different
+  // operator or a moved PGP key must not need a code change. With the shipped
+  // defaults this line is byte-identical to WAR_HEADER_TEXT.
+  headers.push(buildHeader("X-PasevSU-WAR", warTextsFor(config).headerText));
   headers.push(buildHeader("X-PasevSU-Evidence-ID", evidenceId));
   // Optional case label. Omitted when empty rather than sent blank, so a reader can
   // tell "no case set" from "case deliberately blank".
@@ -914,7 +1088,7 @@ async function buildHeaders(config, evidenceId, bodyHash, attachmentEntries, mer
   headers.push(
     buildHeader(
       "X-PasevSU-Message-ID",
-      context.messageId || (await buildMessageId(evidenceId, timestamp))
+      context.messageId || (await buildMessageId(evidenceId, timestamp, config.messageIdDomain))
     )
   );
   headers.push(buildHeader("X-PasevSU-Sha256", joinBlock(block)));
@@ -973,7 +1147,23 @@ function mergeCustomHeaders(existing, incoming) {
  * chain. The snapshot stays as a fallback so the harness and older Thunderbird
  * builds keep working.
  */
-async function listComposeAttachments(tab, details) {
+/*
+ * The name the manifest is attached under, taken from the setting
+ * `manifestFilename`. Not cosmetic: `alreadyStamped` recognises its own work by this
+ * name, so a stored value that cannot be a file name would make every re-fired pass
+ * stamp the message again. Path separators and the characters Windows forbids are
+ * stripped, and an empty result falls back to the shipped name — a message whose
+ * manifest has no name cannot be verified at all.
+ */
+function manifestFilenameFor(config) {
+  const cleaned = sanitizeHeaderValue(config && config.manifestFilename)
+    .replace(/[\\/:*?"<>|]/g, "")
+    .trim();
+  return cleaned || MANIFEST_FILENAME;
+}
+
+async function listComposeAttachments(tab, details, config) {
+  const manifestFilename = manifestFilenameFor(config);
   let listed = [];
   try {
     if (tab && typeof tab.id === "number" && browser.compose.listAttachments) {
@@ -998,7 +1188,7 @@ async function listComposeAttachments(tab, details) {
   const source = listed.length > 0 ? listed : Array.isArray(details.attachments) ? details.attachments : [];
   // Our own manifest is added on the way out; if onBeforeSend fires a second time
   // it must not be hashed as if the user had attached it.
-  return source.filter((att) => att && att.name !== MANIFEST_FILENAME);
+  return source.filter((att) => att && att.name !== manifestFilename);
 }
 
 /*
@@ -1029,16 +1219,17 @@ function customHeaderName(entry) {
   return String(name || "").trim().toLowerCase();
 }
 
-async function alreadyStamped(tab, details) {
+async function alreadyStamped(tab, details, config) {
   if ((details && details.customHeaders ? details.customHeaders : []).some((entry) => customHeaderName(entry) === EVIDENCE_HEADER)) {
     return "evidence-header";
   }
   if (!(tab && typeof tab.id === "number" && browser.compose.listAttachments)) {
     return "";
   }
+  const manifestFilename = manifestFilenameFor(config);
   try {
     const listed = await browser.compose.listAttachments(tab.id);
-    if ((listed || []).some((att) => att && att.name === MANIFEST_FILENAME)) {
+    if ((listed || []).some((att) => att && att.name === manifestFilename)) {
       return "manifest-attached";
     }
   } catch (err) {
@@ -1068,7 +1259,8 @@ function noteFingerprintIssue(issue) {
     .catch(() => {});
 }
 
-async function recordRestamp(reason) {  await Promise.resolve()
+async function recordRestamp(reason) {
+  await Promise.resolve()
     .then(async () => {
       const previous = await browser.storage.local.get({ psempRestamps: 0 });
       await browser.storage.local.set({
@@ -1079,15 +1271,82 @@ async function recordRestamp(reason) {  await Promise.resolve()
     .catch(() => {});
 }
 
-async function handleBeforeSend(tab, details) {
+/*
+ * The receipt half of a re-fired pass.
+ *
+ * A second execution may not re-stamp (see alreadyStamped), but the two receipt
+ * request flags are NOT part of the stamp: Thunderbird keeps them in the compose
+ * window's compFields and rewrites them from the identity whenever the sender
+ * changes it — `if (!gReceiptOptionChanged && prevReceipt == msgCompFields
+ * .returnReceipt && prevReceipt != newReceipt)` in MsgComposeCommands. So a pass
+ * that runs after an identity switch sees the flags reset, and returning `{}` would
+ * confirm that reset: the message leaves with a verified evidence chain and no
+ * receipt request. The options page then reports "requested" for a send that asked
+ * for nothing.
+ *
+ * The retry therefore re-derives ONLY the two booleans, from the same profile-driven
+ * settings as the first pass, and only when the message does not already carry them.
+ * `customHeaders`, `subject` and the body are deliberately absent — re-sending them
+ * would let a second pass overwrite the evidence the first one committed to.
+ *
+ * Mirrors the platform's own asymmetry: `returnReceipt` accepts a forced state,
+ * `deliveryStatusNotification` is compared before being written (ext-compose.js
+ * guards with `!= composeFields.DSN`), so both are set from an observed difference,
+ * never toggled. `{}` means "nothing was missing", which is the normal case.
+ */
+async function receiptOnlyRetry(details) {
   try {
-    const prior = await alreadyStamped(tab, details);
-    if (prior) {
-      await recordRestamp(prior);
+    const config = Object.assign({}, DEFAULTS, await browser.storage.local.get(DEFAULTS));
+    const receiptAddress = await resolveReceiptAddress(config, details);
+    const wantReceipt = Boolean(config.enableReceipt && receiptAddress);
+    const wantDelivery = Boolean(config.enableDeliveryReceipt && receiptAddress);
+    const hasReceipt = Boolean(details && details.returnReceipt);
+    const hasDelivery = Boolean(details && details.deliveryStatusNotification);
+    const retry = {};
+    if (wantReceipt && !hasReceipt) {
+      retry.returnReceipt = true;
+    }
+    if (wantDelivery && !hasDelivery) {
+      retry.deliveryStatusNotification = true;
+    }
+    if (Object.keys(retry).length === 0) {
       return {};
     }
+    // Visible in the log, because "the receipt option disappeared on resend" is
+    // otherwise indistinguishable from "the account never asked for one".
+    console.error("[PasevSU] a re-fired pass re-applied the receipt request:", Object.keys(retry).join(", "));
+    return { details: retry };
+  } catch (err) {
+    console.error("[PasevSU] the receipt retry could not run; the send proceeds as it is:", err);
+    return {};
+  }
+}
 
+async function handleBeforeSend(tab, details) {
+  try {
+    // Read once, before the first decision: the settings name the manifest file, so
+    // the "already stamped?" question cannot be answered without them.
     const config = Object.assign({}, DEFAULTS, await browser.storage.local.get(DEFAULTS));
+    const prior = await alreadyStamped(tab, details, config);
+    if (prior) {
+      await recordRestamp(prior);
+      /*
+       * A re-fired pass must not re-stamp, but it must still leave the message with
+       * both receipts. The two request flags live in the compose window's own
+       * compFields, and the platform puts them back to the identity's values
+       * whenever the identity changes (MsgComposeCommands: only when
+       * `!gReceiptOptionChanged`), and drops them entirely when the composer is
+       * regenerated. Measured failure: the first pass asked for both, the third
+       * pass ran after the identity was re-selected, and the message went out with
+       * the evidence chain intact and no receipt request at all.
+       *
+       * So the retry returns ONLY the receipt flags that are still missing, never
+       * the headers, subject or body — an already-stamped message keeps exactly the
+       * evidence it was given. When nothing is missing this is `{}`, which is what
+       * the send path expects.
+       */
+      return await receiptOnlyRetry(details);
+    }
 
     // Body selection: prefer the plain-text variant. Fall back gracefully.
     let body = details.isPlainText ? details.body : details.plainTextBody;
@@ -1108,9 +1367,13 @@ async function handleBeforeSend(tab, details) {
      */
     const warSubject = appendWarMarker(details.subject);
     const warField = warBodyField(details);
-    const warBody = warField ? withWarNotice(details, warField) : null;
+    // One set of texts per send: the header and the body notice must never be able
+    // to disagree about who signed the message or which standard was used.
+    const warBody = warField
+      ? withWarNotice(details, warField, warTextsFor(config))
+      : null;
 
-    const existingAttachments = await listComposeAttachments(tab, details);
+    const existingAttachments = await listComposeAttachments(tab, details, config);
     const { entries: attachmentEntries, failures: attachmentFailures } =
       await computeAttachmentHashes(existingAttachments);
 
@@ -1132,7 +1395,7 @@ async function handleBeforeSend(tab, details) {
      */
     const sequence = await nextSequence();
     const nonce = uuidV4().replace(/-/g, "");
-    const messageId = await buildMessageId(evidenceId, stamp);
+    const messageId = await buildMessageId(evidenceId, stamp, config.messageIdDomain);
     const recipients = normalizeRecipients(details.to || details.recipients);
     // Bound to the primary recipient: a copy re-sent to someone else no longer
     // matches the envelope the manifest names.
@@ -1163,6 +1426,8 @@ async function handleBeforeSend(tab, details) {
       evidenceId,
       issuedAt: stamp,
       organization: config.organization,
+      framework: config.manifestFramework,
+      standard: config.manifestStandard,
     });
 
     const manifestText = await buildManifest(
@@ -1183,7 +1448,7 @@ async function handleBeforeSend(tab, details) {
     // Merkle root (those cover the original body + files).
     try {
       await browser.compose.addAttachment(tab.id, {
-        file: new File([manifestText], MANIFEST_FILENAME, { type: "application/json" }),
+        file: new File([manifestText], manifestFilenameFor(config), { type: "application/json" }),
       });
     } catch (err) {
       // A missing manifest must not stop the message, but it must not pass in
@@ -1201,13 +1466,19 @@ async function handleBeforeSend(tab, details) {
     // Where the receipts go. Both requests are on by default and independent: the
     // read receipt (MDN) asks the recipient, the delivery receipt (DSN) asks the
     // receiving server, so switching one off must not take the other with it. The
-    // stored value is a CODE ("no-address"), not a sentence: the options page owns
-    // the words and can show them in the user's language.
-    const receiptAddress = resolveReceiptAddress(config, details);
+    // address comes from the profile (see resolveReceiptAddress) instead of a
+    // hard-coded value, so a new account needs no new setting. The stored value is a
+    // CODE ("no-address"), not a sentence: the options page owns the words and can
+    // show them in the user's language. `receiptMode: "off"` is a deliberate silence,
+    // not a fault, so it must not be reported as a missing address.
+    const receiptMode = normalizeReceiptMode(config.receiptMode);
+    const receiptAddress = await resolveReceiptAddress(config, details);
     const receiptTo = config.enableReceipt ? receiptAddress : "";
     const deliveryTo = config.enableDeliveryReceipt ? receiptAddress : "";
     const receiptProblem =
-      (config.enableReceipt || config.enableDeliveryReceipt) && !receiptAddress
+      receiptMode !== "off" &&
+      (config.enableReceipt || config.enableDeliveryReceipt) &&
+      !receiptAddress
         ? "no-address"
         : null;
     await Promise.resolve()
@@ -1321,4 +1592,24 @@ try {
   Promise.resolve()
     .then(() => browser.storage.local.set({ psempArmError: String((err && err.message) || err) }))
     .catch(() => {});
+}
+
+// --- Toolbar button --------------------------------------------------------
+// The button exists so the armed state can be reached in one click, and it is
+// deliberately popup-less: a popup would be another surface whose strings have
+// to be translated three times over, while the options page already carries the
+// heartbeat, the last send and every warning this extension can raise.
+try {
+  if (browser.browserAction && browser.browserAction.onClicked) {
+    browser.browserAction.onClicked.addListener(() => {
+      Promise.resolve()
+        .then(() => browser.runtime.openOptionsPage())
+        .catch((err) => {
+          console.error("[PasevSU] could not open the options page:", err);
+        });
+    });
+  }
+} catch (err) {
+  // A Thunderbird build without browserAction must not lose the send hook.
+  console.error("[PasevSU] could not attach the toolbar button:", err);
 }

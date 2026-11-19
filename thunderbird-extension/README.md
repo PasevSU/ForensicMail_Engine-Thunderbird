@@ -283,7 +283,7 @@ Thunderbird → Add-ons → this extension → Preferences).
 
 ## Shared settings file
 
-The options page keeps six keys in `browser.storage.local`:
+The options page keeps twenty-three keys in `browser.storage.local`:
 
 | Key | Default | Effect |
 | --- | --- | --- |
@@ -291,15 +291,43 @@ The options page keeps six keys in `browser.storage.local`:
 | `framework` | `Forensic-Mail` | `X-PasevSU-Framework` |
 | `origin` | `Thunderbird` | `X-PasevSU-Origin` |
 | `organization` | `PasevSU` | `X-PasevSU-Organization` |
+| `caseId` | empty | `X-PasevSU-Case-ID`, omitted while empty |
 | `pgpFingerprint` | empty | `X-PasevSU-PGP-Fingerprint`, omitted while empty |
+| `pgpSigner` | your address | the signer named in `X-PasevSU-WAR` and in the warning banner |
+| `pgpStandard` | `OpenPGP/MIME signed message (RFC 4880 and 3156)` | the signature standard named next to the signer |
 | `enableOts` | `true` | writes the `X-PasevSU-OTS: pending` marker |
+| `enableReceipt` | `true` | asks for a read receipt (MDN, RFC 8098) |
+| `enableDeliveryReceipt` | `true` | asks for a delivery receipt (DSN, RFC 3461) |
+| `receiptMode` | `identity` | which address receives the receipts: the sending identity, a typed one, or none |
+| `receiptAddress` | empty | the typed address, used only when `receiptMode` is `custom` |
+| `messageIdDomain` | `forensic.evidence.pasevsu` | the right-hand side of every `Message-ID`; the left-hand side is derived from the evidence id |
+| `manifestFilename` | `PasevSU_Manifest.json` | the name the manifest is attached under — and the name `alreadyStamped` looks for |
+| `manifestFramework` | `PasevSU` | the framework word written inside the manifest and the provenance block |
+| `manifestStandard` | `PSEMP` | the standard word written next to it; a verifier cuts on these two names |
+| `algoBody` | `SHA-256` | the `algorithms.body` field the manifest publishes |
+| `algoExtra` | `SHA3-512, BLAKE3` | the `algorithms.extra` ARRAY — one line here, split on commas |
+| `algoMerkle` | `SHA-256` | the `algorithms.merkle` field |
+| `algoEngine` | `AES-256-GCM` | the `algorithms.engine` field |
+| `algoSignature` | `OpenPGP` | the `algorithms.signature` field |
+| `algoTimestamp` | `OpenTimestamps` | the `algorithms.timestamp` field |
+
+The last ten keys exist because a second deployment must be able to name itself. Every
+one of them defaults to the value this build already produced, so an untouched install
+records exactly what it recorded before: `messageIdDomain`, `manifestFilename`,
+`manifestFramework`, `manifestStandard` decide *who the evidence says it came from*,
+and the six `algo*` keys publish *what was actually run* into the manifest's
+`algorithms` block. `algoExtra` is the only field that may legitimately be empty (an
+empty line publishes `extra: []`). The header value side is sanitised at send time —
+a newline typed into `pgpSigner` becomes a space, a path separator typed into
+`manifestFilename` is dropped — so a stored setting can never break the header record
+or make every re-fired pass stamp the message again.
 
 The gateway keeps the same keys in
 [`../psemp-gateway/settings.default.json`](../psemp-gateway/settings.default.json),
 so one file can describe both halves. Use **Import settings file** on the options
-page to load it and **Export settings file** to write it back. Importing copies the
-six keys, normalises a pasted fingerprint to uppercase hex, and refreshes the form;
-a broken file is reported and changes nothing.
+page to load it and **Export settings file** to write it back. Importing copies every
+key except `origin`, normalises a pasted fingerprint to uppercase hex, and refreshes
+the form; a broken file is reported and changes nothing.
 
 `origin` is the one key import deliberately ignores: it names the producer, so the
 extension always writes `Thunderbird` and the gateway writes `PSEMP-Gateway`.
@@ -310,8 +338,8 @@ single divergence across both halves.
 
 A folder loaded through **Load Temporary Add-on…** disappears on every restart. To
 keep PSEMP active without re-loading it by hand, install it as a profile
-side-load: zip `manifest.json`, `background.js`, `options.html`, `options.js` and the
-whole `_locales` tree at the archive **root** into
+side-load: zip `manifest.json`, `background.js`, `options.html`, `options.js`, the
+whole `icons` tree and the whole `_locales` tree at the archive **root** into
 `pasevsu-forensic-headers@pasev.example.xpi` and place it in
 `<profile>\extensions\`. Entry names must use **forward slashes** even on Windows —
 see [Why the archive has to be packed this way](#why-the-archive-has-to-be-packed-this-way).
@@ -328,6 +356,32 @@ Thunderbird runs — Windows answers *"the requested operation cannot be perform
 a file with a user-mapped section open"*. The script reports that and exits with code
 2; quit Thunderbird and run it again. Everything else it does is already in place at
 that point, so the second run only has to swap the file.
+
+### Icons and the toolbar button
+
+The add-on declares four PNG sizes (`16`, `32`, `48`, `128`) and an MV2
+`browser_action` that opens the options page; it has deliberately no popup, because
+the options page already carries the heartbeat, the last send and every warning the
+extension can raise. Clicking the button is the one-click way back to that page.
+
+The PNGs are generated, not drawn by hand:
+
+```powershell
+node thunderbird-extension\tools\make-icons.cjs
+```
+
+[`tools/make-icons.cjs`](tools/make-icons.cjs) writes valid PNGs with `node:zlib` and
+a hand-rolled CRC table — no image library, so the repository keeps its rule that the
+add-on ships with nothing to install. Four files of a few hundred bytes each are
+committed, because a build step that only runs on the author's machine is not a
+build step. `install.ps1` reads the icon paths out of `manifest.json` and refuses to
+pack when a declared icon is absent, and `tools/check-repo.cjs` verifies that every
+declared icon exists, is a real PNG (signature and `IHDR`) and has the pixel size its
+manifest key claims.
+
+The script lives in `tools/` on purpose: `tools/check-repo.cjs` scans the top level of
+`thunderbird-extension/` for Node.js code, and an add-on script must not `require()`
+anything.
 
 ### Why the archive has to be packed this way
 
@@ -624,17 +678,20 @@ The options page and its hints are localised through `_locales/`:
 
 | Locale | File | Coverage |
 | --- | --- | --- |
-| English (default) | [`_locales/en/messages.json`](_locales/en/messages.json) | 41 keys |
-| German | [`_locales/de/messages.json`](_locales/de/messages.json) | 41 keys, mirrored |
-| Bulgarian | [`_locales/bg/messages.json`](_locales/bg/messages.json) | 41 keys, mirrored |
+| English (default) | [`_locales/en/messages.json`](_locales/en/messages.json) | 79 keys |
+| German | [`_locales/de/messages.json`](_locales/de/messages.json) | 79 keys, mirrored |
+| Bulgarian | [`_locales/bg/messages.json`](_locales/bg/messages.json) | 79 keys, mirrored |
 
 German was the reported gap ("there is no delivery-receipt function in German"):
 both checkboxes (read and delivery receipt), the fallback-address field, its hint, the
 warning and the explanation paragraph all render in German on a German Thunderbird,
 using the standard terms "Lesebestätigung" (read receipt, MDN) and
-"Zustellbestätigung (DSN)" (delivery receipt). Every locale must carry **exactly** the
-same key set — `psemp-gateway/test/locales.cjs` fails on a missing, extra or empty key
-in any language, so a half-translated panel cannot ship.
+"Zustellbestätigung (DSN)" (delivery receipt). The ten evidence-chain settings added
+by 1.9 — the two receipt keys, the chain identity and the six published algorithms —
+are localised too, so a German panel does not fall back to English mid-section.
+Every locale must carry **exactly** the same key set —
+`psemp-gateway/test/locales.cjs` fails on a missing, extra or empty key in any
+language, so a half-translated panel cannot ship.
 
 ## The two signing layers
 

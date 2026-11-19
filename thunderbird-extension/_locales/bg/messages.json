@@ -84,6 +84,58 @@
   "fingerprintIsKeyId": {
     "message": "Това е идентификатор на ключ (8 или 16 знака), не отпечатък. Отворете свойствата на ключа и копирайте пълния отпечатък — 40 знака."
   },
+  "rejectedHeaders": {
+    "message": "Заглавки, които разширението отказа да запише (позволени са само имена с X-, List- и msip_labels): $list$",
+    "placeholders": {
+      "list": {
+        "content": "$1"
+      }
+    }
+  },
+  "fingerprintIssueNotHex": {
+    "message": "Записано на $at$: PGP отпечатъкът съдържа знаци извън 0-9 и A-F, затова не беше записано PGP твърдение.",
+    "placeholders": {
+      "at": {
+        "content": "$1"
+      }
+    }
+  },
+  "fingerprintIssueKeyId": {
+    "message": "Записано на $at$: в полето за PGP отпечатък стои идентификатор на ключ, а не отпечатък — затова не беше записано PGP твърдение.",
+    "placeholders": {
+      "at": {
+        "content": "$1"
+      }
+    }
+  },
+  "fingerprintIssueWrongLength": {
+    "message": "Записано на $at$: PGP отпечатъкът не е нито 40, нито 64 шестнадесетични знака, затова не беше записано PGP твърдение.",
+    "placeholders": {
+      "at": {
+        "content": "$1"
+      }
+    }
+  },
+  "restampReasonEvidenceHeader": {
+    "message": "заглавката за доказателство вече беше в съобщението"
+  },
+  "restampReasonManifestAttached": {
+    "message": "манифестът вече беше прикачен"
+  },
+  "restampsSummary": {
+    "message": "Пропускането за изпращане се изпълни повторно $count$ път(и), без да подпечата отново. Последно: $when$ — $reason$.",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      },
+      "when": {
+        "content": "$2"
+      },
+      "reason": {
+        "content": "$3"
+      }
+    }
+  },
   "labelVersion": {
     "message": "Версия"
   },
@@ -108,6 +160,18 @@
   "pgpHint": {
     "message": "напр. 3F2A9C… (празно = без хедър)"
   },
+  "labelPgpSigner": {
+    "message": "Адрес на PGP подписващия (посочен в WAR бележката)"
+  },
+  "pgpSignerHint": {
+    "message": "напр. name@example.org (празно = стойността по подразбиране)"
+  },
+  "labelPgpStandard": {
+    "message": "Стандарт за подпис, посочен в WAR бележката"
+  },
+  "pgpStandardHint": {
+    "message": "напр. OpenPGP/MIME signed message (RFC 4880 and 3156)"
+  },
   "labelOts": {
     "message": "Маркирай всяко писмо за OpenTimestamps (<code>X-PasevSU-OTS: pending</code>)"
   },
@@ -117,11 +181,92 @@
   "labelDeliveryReceipt": {
     "message": "Искай разписка за доставяне (DSN) за всяко писмо (Thunderbird добавя DSN полетата, <code>RFC 3461</code>)"
   },
+  "labelReceiptMode": {
+    "message": "Откъде идва адресът за разписката"
+  },
+  "receiptModeIdentity": {
+    "message": "Идентичността на подателя от профила"
+  },
+  "receiptModeCustom": {
+    "message": "Само адресът по-долу"
+  },
+  "receiptModeOff": {
+    "message": "Без адрес за разписка"
+  },
+  "receiptModeHint": {
+    "message": "профилът се чете при всяко изпращане, така че нов профил не изисква нова настройка"
+  },
   "labelReceiptAddress": {
     "message": "Резервен адрес за разписката"
   },
   "receiptAddressHint": {
     "message": "ползва се само когато Thunderbird не подаде адреса на подателя"
+  },
+  "sectionEvidenceChain": {
+    "message": "Идентичност на доказателствената верига"
+  },
+  "evidenceChainNote": {
+    "message": "Тези имена се записват в хеширания манифест и във всяка инструкция за проверка, така че втора инсталация да може да каже кой е издал съобщението, без да се променя код."
+  },
+  "labelMessageIdDomain": {
+    "message": "Домейн на Message-ID"
+  },
+  "messageIdDomainHint": {
+    "message": "дясната част на Message-ID; лявата се извежда от идентификатора на доказателството"
+  },
+  "labelManifestFilename": {
+    "message": "Име на файла на манифеста"
+  },
+  "manifestFilenameHint": {
+    "message": "името на прикачения файл и името, към което сочи всяка стъпка за проверка"
+  },
+  "labelManifestFramework": {
+    "message": "Дума за framework в манифеста"
+  },
+  "manifestFrameworkHint": {
+    "message": "стои в хеширания манифест; проверяващият се ориентира по това име"
+  },
+  "labelManifestStandard": {
+    "message": "Дума за стандарт в манифеста"
+  },
+  "manifestStandardHint": {
+    "message": "именува протокола на пакета, напр. PSEMP"
+  },
+  "labelAlgoBody": {
+    "message": "Хеш на текста"
+  },
+  "algoBodyHint": {
+    "message": "хешът, който манифестът обявява за текста на съобщението"
+  },
+  "labelAlgoExtra": {
+    "message": "Допълнителни хешове"
+  },
+  "algoExtraHint": {
+    "message": "разделени със запетая, публикуват се като списък; оставете празно за без допълнителни хешове"
+  },
+  "labelAlgoMerkle": {
+    "message": "Merkle хеш"
+  },
+  "algoMerkleHint": {
+    "message": "хешът, използван за дървото на доказателствата"
+  },
+  "labelAlgoEngine": {
+    "message": "Шифър на digest блока"
+  },
+  "algoEngineHint": {
+    "message": "шифърът, който се обявява за криптирания digest блок"
+  },
+  "labelAlgoSignature": {
+    "message": "Схема за подпис"
+  },
+  "algoSignatureHint": {
+    "message": "напр. OpenPGP; само се записва, разширението не го изпълнява"
+  },
+  "labelAlgoTimestamp": {
+    "message": "Схема за времеви печат"
+  },
+  "algoTimestampHint": {
+    "message": "напр. OpenTimestamps; само се записва, разширението не го изпълнява"
   },
   "save": {
     "message": "Запази"

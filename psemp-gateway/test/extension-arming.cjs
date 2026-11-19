@@ -250,6 +250,80 @@ check('a re-fired beforeSend does not stack the marker or the notice', async () 
   );
 });
 
+/*
+ * Refusing to re-stamp must not turn into refusing to request the receipt.
+ *
+ * Thunderbird keeps returnReceipt/DSN in the compose window's compFields and rewrites
+ * them from the identity whenever the sender picks a different one (MsgComposeCommands:
+ * `!gReceiptOptionChanged && prevReceipt == msgCompFields.returnReceipt && prevReceipt
+ * != newReceipt`). A later pass therefore sees the flags reset — and returning `{}`
+ * would confirm that reset, so the message leaves with a verified evidence chain and no
+ * receipt request at all while the options page reports "requested".
+ *
+ * The retry is deliberately narrow: only the two booleans, never the headers, the
+ * subject or the body, because those are the evidence the first pass committed to.
+ */
+check('a re-fired pass re-applies a receipt request the composer dropped', async () => {
+  const { listeners, added } = loadExtension();
+  const details = {
+    isPlainText: true,
+    subject: 'Case 2026',
+    body: 'authored',
+    from: 'pasev@example.org',
+    returnReceipt: false,
+    deliveryStatusNotification: false,
+    attachments: [],
+    customHeaders: [{ name: 'X-PasevSU-Evidence-ID', value: 'abc' }],
+  };
+  const second = await listeners[0]({}, details);
+
+  assert.deepStrictEqual(
+    Object.keys(second.details).sort(),
+    ['deliveryStatusNotification', 'returnReceipt'],
+    'only the two receipt flags may come back on a re-fired pass'
+  );
+  assert.strictEqual(second.details.returnReceipt, true);
+  assert.strictEqual(second.details.deliveryStatusNotification, true);
+  assert.strictEqual(second.details.customHeaders, undefined, 'the evidence must not be rewritten');
+  assert.strictEqual(second.details.subject, undefined, 'the marker must not be re-applied');
+  assert.strictEqual(second.details.body, undefined, 'the notice must not be appended twice');
+  assert.strictEqual(added.length, 0, 'no second manifest may be attached');
+});
+
+check('a re-fired pass leaves a receipt request that survived untouched', async () => {
+  const { listeners } = loadExtension();
+  const details = {
+    isPlainText: true,
+    body: 'authored',
+    from: 'pasev@example.org',
+    returnReceipt: true,
+    deliveryStatusNotification: true,
+    attachments: [],
+    customHeaders: [{ name: 'X-PasevSU-Evidence-ID', value: 'abc' }],
+  };
+  const second = await listeners[0]({}, details);
+  assert.deepStrictEqual(
+    Object.keys(second || {}),
+    [],
+    'a message that already asks for both receipts needs no write at all'
+  );
+});
+
+check('receiptMode=off applies nothing on a re-fired pass either', async () => {
+  const { listeners } = loadExtension({ stored: { receiptMode: 'off' } });
+  const details = {
+    isPlainText: true,
+    body: 'authored',
+    from: 'pasev@example.org',
+    returnReceipt: false,
+    deliveryStatusNotification: false,
+    attachments: [],
+    customHeaders: [{ name: 'X-PasevSU-Evidence-ID', value: 'abc' }],
+  };
+  const second = await listeners[0]({}, details);
+  assert.deepStrictEqual(Object.keys(second || {}), [], 'a deliberate silence stays silent');
+});
+
 check("the add-on's own manifest is never hashed as a user attachment", async () => {
   /*
    * Defence in depth for the one path the guard cannot see: listAttachments() is
@@ -341,6 +415,127 @@ check('the WAR texts are byte-identical in both engines', () => {
   assert.match(WAR_NOTICE_HTML, /FORWARDING THIS EMAIL IS STRICTLY FORBIDDEN/);
   assert.match(WAR_NOTICE_HTML, /pasevdenislav@gmail\.com/);
   assert.match(WAR_NOTICE_HTML, /RFC 4880 and 3156/);
+});
+
+check('a configured signer produces the same WAR bytes in both engines', () => {
+  /*
+   * The check above pins the SHIPPED wording, i.e. the one built from the hardcoded
+   * signer and standard. But the wording is now a setting: `pgpSigner` and
+   * `pgpStandard` reach the same `warTexts(signer, standard)` builder at send time, in
+   * the extension AND in the gateway. Two engines that agree only on their defaults
+   * would still hand a verifier a footer the other one never wrote the moment an
+   * operator typed a different address — so the configurable path is compared here,
+   * byte for byte, including the fallback when a field is blank.
+   *
+   * `warTextsFor` sits between the constants and `hexFromBuffer`, so the same source
+   * slice already carries it; it is pulled out of the vm by name rather than by
+   * re-reading the file, which is what keeps this a comparison of the real code.
+   */
+  const start = CODE.indexOf('const WAR_MARKER');
+  const end = CODE.indexOf('function hexFromBuffer');
+  assert.ok(start >= 0 && end > start, 'the WAR constants must sit together, before the hashing helpers');
+
+  const probe = `${CODE.slice(start, end)}\n;({WAR_SIGNER, WAR_STANDARD, warTextsFor})`;
+  const extension = vm.runInNewContext(probe, {}, { filename: 'background.js#war-for' });
+  const gateway = require('../api.js');
+
+  assert.strictEqual(
+    typeof extension.warTextsFor,
+    'function',
+    'the configured wording must live in the same block as the constants it starts from'
+  );
+  assert.strictEqual(
+    typeof gateway.warTextsFor,
+    'function',
+    'the gateway must expose the configured wording for the comparison to mean anything'
+  );
+
+  /*
+   * Four inputs, not one: a real configuration, a blank one (which must fall back
+   * exactly like the shipped text, or an empty settings file would delete the
+   * prohibition), an object with neither field, and a missing object.
+   */
+  const cases = [
+    { pgpSigner: 'ops@example.test', pgpStandard: 'Test standard' },
+    { pgpSigner: '   ', pgpStandard: '' },
+    {},
+    undefined,
+  ];
+
+  for (const config of cases) {
+    const mine = extension.warTextsFor(config);
+    const theirs = gateway.warTextsFor(config);
+    const label = config ? JSON.stringify(config) : 'undefined';
+    // Field by field: the extension's object comes from a different vm realm, so a
+    // deepStrictEqual on the object itself would fail on the prototype, not the bytes.
+    for (const field of ['headerText', 'noticeText', 'noticeHtml']) {
+      assert.strictEqual(
+        mine[field],
+        theirs[field],
+        `warTextsFor(${label}).${field} drifted between the two engines`
+      );
+    }
+    // The shape the rest of the pipeline relies on, checked on both sides at once.
+    assert.strictEqual(mine.headerText, mine.headerText.trim());
+    assert.ok(!/[\r\n]/.test(mine.headerText), 'the header value must stay one line');
+    assert.ok(mine.headerText.endsWith('{{ PasevSU-WAR }}'));
+    assert.ok(mine.noticeText.startsWith('\n\n{{ PasevSU-WAR }}\n'));
+  }
+
+  // The configured values really do reach the text; a builder that ignored its argument
+  // would pass every check above by returning the defaults four times.
+  const custom = extension.warTextsFor({
+    pgpSigner: 'ops@example.test',
+    pgpStandard: 'Test standard',
+  });
+  for (const field of ['headerText', 'noticeText', 'noticeHtml']) {
+    assert.match(custom[field], /ops@example\.test/, `${field} must name the configured signer`);
+    assert.match(custom[field], /Test standard/, `${field} must name the configured standard`);
+  }
+  assert.ok(
+    !custom.headerText.includes('pasevdenislav@gmail.com'),
+    'a configured signer must replace the shipped one, not be appended to it'
+  );
+
+  // A blank field falls back to the shipped value, and the shipped value is not a
+  // third wording: it is exactly the default text the check above pinned.
+  const fallback = extension.warTextsFor({ pgpSigner: '   ', pgpStandard: '' });
+  assert.strictEqual(fallback.headerText, extension.warTextsFor({}).headerText);
+  assert.match(fallback.headerText, /pasevdenislav@gmail\.com/);
+  assert.match(fallback.headerText, /RFC 4880 and 3156/);
+
+  /*
+   * A newline in a setting is a header-injection attempt, not wording: both engines
+   * flatten it through `warSafeText`, and an unflattened value would produce a field
+   * Thunderbird refuses and a header record that no longer digests to the same bytes.
+   * `noticeText` is legitimately multi-line, so it is held to a line COUNT instead:
+   * an injected break would add lines the default block does not have.
+   */
+  const hostile = {
+    pgpSigner: 'ops@example.test\r\nBcc: attacker@example.test',
+    pgpStandard: 'Test\nstandard',
+  };
+  const injected = extension.warTextsFor(hostile);
+  const neutral = extension.warTextsFor({ pgpSigner: 'ops@example.test', pgpStandard: 'Test standard' });
+  assert.ok(!/[\r\n]/.test(injected.headerText), 'headerText must never carry a line break');
+  assert.ok(!/[\r\n]/.test(injected.noticeHtml), 'noticeHtml must never carry a line break');
+  assert.ok(!/\r/.test(injected.noticeText), 'noticeText must never carry a carriage return');
+  assert.strictEqual(
+    injected.noticeText.split('\n').length,
+    neutral.noticeText.split('\n').length,
+    'a line break in a setting must not add lines to the notice'
+  );
+  // Not "the injected words disappear": `warSafeText` collapses CRLF into a SPACE, so
+  // the text survives as inline wording — which is harmless, because it is no longer a
+  // line of its own. What must hold is that it never starts a line.
+  assert.ok(
+    !/^Bcc:/m.test(injected.headerText) && !/^Bcc:/m.test(injected.noticeText),
+    'an injected header name must never begin a line'
+  );
+  assert.match(injected.headerText, /ops@example\.test Bcc: attacker@example\.test/);
+  assert.strictEqual(injected.headerText, gateway.warTextsFor(hostile).headerText);
+  assert.strictEqual(injected.noticeText, gateway.warTextsFor(hostile).noticeText);
+  assert.strictEqual(injected.noticeHtml, gateway.warTextsFor(hostile).noticeHtml);
 });
 
 check('the documentation quotes the canonical WAR bytes and nothing retired', () => {
@@ -911,6 +1106,99 @@ check('enableReceipt=false drops the receipt request entirely', async () => {
   assert.ok(!headers.has('Disposition-Notification-To'));
   assert.ok(!headers.has('X-PasevSU-Receipt'));
   assert.strictEqual(out.returnReceipt, undefined);
+});
+
+// The address used to be whatever the operator typed into `receiptAddress`, which
+// meant a new account produced "no-address" until someone remembered the field.
+// The profile knows the sending identity, so it is asked instead: the value is
+// derived per send and nothing is hard-coded.
+check('the receipt address comes from the profile when the snapshot has no sender', async () => {
+  const { listeners, writes } = loadExtension({
+    identities: {
+      default: {
+        id: 'id1',
+        email: 'profile@example.org',
+        name: 'Profile Sender',
+        accountId: 'account1',
+      },
+    },
+  });
+  const details = { isPlainText: true, body: 'a', attachments: [], customHeaders: [] };
+  const { details: out } = await listeners[0]({}, details);
+
+  assert.strictEqual(out.returnReceipt, true, 'a profile identity is enough to ask for a receipt');
+  assert.strictEqual(out.deliveryStatusNotification, true);
+  assert.strictEqual(writes.psempLastSend.receiptTo, 'profile@example.org');
+  assert.strictEqual(writes.psempReceiptError, null, 'a resolved address is not a problem');
+});
+
+check('the identity named by the compose window wins over the default one', async () => {
+  const { listeners, writes } = loadExtension({
+    identities: {
+      default: { id: 'id1', email: 'default@example.org', accountId: 'account1' },
+      byId: { id9: { id: 'id9', email: 'chosen@example.org', accountId: 'account1' } },
+    },
+  });
+  const details = {
+    isPlainText: true,
+    body: 'b',
+    attachments: [],
+    customHeaders: [],
+    identityId: 'id9',
+  };
+  await listeners[0]({}, details);
+
+  assert.strictEqual(
+    writes.psempLastSend.receiptTo,
+    'chosen@example.org',
+    'the identity actually composing the message is the mailbox that answers',
+  );
+});
+
+check('receiptMode=custom ignores the profile and keeps the typed address', async () => {
+  const { listeners, writes } = loadExtension({
+    stored: { receiptMode: 'custom', receiptAddress: 'typed@example.org' },
+    identities: { default: { id: 'id1', email: 'profile@example.org', accountId: 'account1' } },
+  });
+  const details = { isPlainText: true, body: 'c', attachments: [], customHeaders: [] };
+  const { details: out } = await listeners[0]({}, details);
+
+  assert.strictEqual(writes.psempLastSend.receiptTo, 'typed@example.org');
+  assert.strictEqual(out.returnReceipt, true);
+});
+
+check('receiptMode=off asks for neither receipt and reports no problem', async () => {
+  const { listeners, writes } = loadExtension({
+    stored: { receiptMode: 'off' },
+    identities: { default: { id: 'id1', email: 'profile@example.org', accountId: 'account1' } },
+  });
+  const details = {
+    isPlainText: true,
+    body: 'd',
+    attachments: [],
+    customHeaders: [],
+    from: 'pasev@example.org',
+  };
+  const { details: out } = await listeners[0]({}, details);
+
+  assert.strictEqual(out.returnReceipt, undefined);
+  assert.strictEqual(out.deliveryStatusNotification, undefined);
+  assert.strictEqual(writes.psempLastSend.receiptTo, null);
+  assert.strictEqual(
+    writes.psempReceiptError,
+    null,
+    'a deliberate silence is not a missing address',
+  );
+});
+
+check('a profile that cannot be read never breaks the send', async () => {
+  // No `identities` stub at all: exactly what a build without `accountsRead` sees.
+  const { listeners, warnings, errors } = loadExtension({ stored: { enableReceipt: false } });
+  const details = { isPlainText: true, body: 'e', attachments: [], customHeaders: [] };
+  const { details: out } = await listeners[0]({}, details);
+
+  assert.ok(out.customHeaders && out.customHeaders.length > 0, 'the headers are still written');
+  assert.strictEqual(warnings.length + errors.length, 0, 'a missing optional API is not an error');
 });
 
 check('the HTML body falls back to plainTextBody', async () => {

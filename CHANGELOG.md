@@ -33,6 +33,30 @@ Two versions exist in the ecosystem and must not be confused:
 - `psemp-gateway/test/extension-arming.cjs` grew a check asserting exactly that
   independence, plus an assertion that the delivery receipt is requested by
   default through the native field.
+- **Every remaining hardcoded value is now a setting, in both engines.** Ten keys
+  join the shared set — `messageIdDomain`, `manifestFilename`, `manifestFramework`,
+  `manifestStandard`, `algoBody`, `algoExtra`, `algoMerkle`, `algoEngine`,
+  `algoSignature`, `algoTimestamp` — so the options page holds twenty-three keys
+  instead of thirteen, and `psemp-gateway/settings.default.json` describes the same
+  twenty-three. Nothing that used to be a constant is now unreachable: the
+  `Message-ID` domain, the name the manifest is attached under, the `framework`/
+  `standard` words written inside the hashed manifest and the provenance block, and
+  the six fields of the published `algorithms` object are all editable.
+- **The defaults are byte-for-byte what the constants produced.** An install that
+  never opens the options page writes the same `Message-ID`, the same attachment
+  name and the same `algorithms` block as before, so no existing record stops
+  verifying. `algoExtra` is the one field allowed to be empty — it publishes `[]`
+  there, never a string.
+- **Settings are sanitised where they become header text.** A newline typed into
+  `pgpSigner` or `pgpStandard` is flattened to a space by the shared `warSafeText`,
+  and characters that cannot appear in an attachment name are dropped from
+  `manifestFilename` — a stored setting cannot inject a header or make every
+  re-fired pass stamp the message again.
+- `psemp-gateway/test/extension-arming.cjs` adds a fixture that renders the WAR
+  wording from a **configured** signer and standard in both engines and compares
+  the three output strings byte for byte, including the blank-field fallback and a
+  hostile value containing `\r\n`. Two engines that agreed only on their defaults
+  would still hand a verifier a footer the other one never wrote.
 
 ### Fixed
 

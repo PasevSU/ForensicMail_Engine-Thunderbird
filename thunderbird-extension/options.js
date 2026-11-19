@@ -10,11 +10,36 @@ const DEFAULTS = {
   organization: "PasevSU",
   caseId: "",
   pgpFingerprint: "",
+  pgpSigner: "pasevdenislav@gmail.com",
+  pgpStandard: "OpenPGP/MIME signed message (RFC 4880 and 3156)",
   enableOts: true,
   enableReceipt: true,
   enableDeliveryReceipt: true,
+  receiptMode: "identity",
   receiptAddress: "",
+  // The rest of the evidence chain is named here rather than in the code, because a
+  // second operator must not need a patch to say who minted a message. The defaults
+  // are exactly what this build already writes, so an untouched install is unchanged.
+  messageIdDomain: "forensic.evidence.pasevsu",
+  manifestFilename: "PasevSU_Manifest.json",
+  manifestFramework: "PasevSU",
+  manifestStandard: "PSEMP",
+  algoBody: "SHA-256",
+  algoExtra: "SHA3-512, BLAKE3",
+  algoMerkle: "SHA-256",
+  algoEngine: "AES-256-GCM",
+  algoSignature: "OpenPGP",
+  algoTimestamp: "OpenTimestamps",
 };
+
+// The three ways a receipt address can be chosen. Kept in step with background.js:
+// an unknown value there means "identity", so the page must show that too instead of
+// rendering an empty select.
+const RECEIPT_MODES = ["identity", "custom", "off"];
+
+function normalizeReceiptMode(value) {
+  return RECEIPT_MODES.indexOf(value) === -1 ? "identity" : value;
+}
 
 const FIELDS = {
   version: document.getElementById("version"),
@@ -23,10 +48,23 @@ const FIELDS = {
   organization: document.getElementById("organization"),
   caseId: document.getElementById("caseId"),
   pgpFingerprint: document.getElementById("pgpFingerprint"),
+  pgpSigner: document.getElementById("pgpSigner"),
+  pgpStandard: document.getElementById("pgpStandard"),
   enableOts: document.getElementById("enableOts"),
   enableReceipt: document.getElementById("enableReceipt"),
   enableDeliveryReceipt: document.getElementById("enableDeliveryReceipt"),
+  receiptMode: document.getElementById("receiptMode"),
   receiptAddress: document.getElementById("receiptAddress"),
+  messageIdDomain: document.getElementById("messageIdDomain"),
+  manifestFilename: document.getElementById("manifestFilename"),
+  manifestFramework: document.getElementById("manifestFramework"),
+  manifestStandard: document.getElementById("manifestStandard"),
+  algoBody: document.getElementById("algoBody"),
+  algoExtra: document.getElementById("algoExtra"),
+  algoMerkle: document.getElementById("algoMerkle"),
+  algoEngine: document.getElementById("algoEngine"),
+  algoSignature: document.getElementById("algoSignature"),
+  algoTimestamp: document.getElementById("algoTimestamp"),
 };
 
 // English fallbacks: the page must stay readable when a catalogue entry is missing
@@ -49,6 +87,18 @@ const FALLBACK = {
     "The fingerprint was not saved: it must be 40 or 64 hexadecimal characters (no spaces).",
   fingerprintIsKeyId:
     "That is a key ID (8 or 16 characters), not a fingerprint. Copy the full 40-character fingerprint.",
+  rejectedHeaders:
+    "Headers the extension refused to write (only X-, List- and msip_labels names are allowed): $1",
+  fingerprintIssueNotHex:
+    "Recorded at $1: the PGP fingerprint contains characters other than 0-9 and A-F, so no PGP claim was written.",
+  fingerprintIssueKeyId:
+    "Recorded at $1: the PGP fingerprint field holds a key ID, not a fingerprint, so no PGP claim was written.",
+  fingerprintIssueWrongLength:
+    "Recorded at $1: the PGP fingerprint is neither 40 nor 64 hexadecimal characters, so no PGP claim was written.",
+  restampReasonEvidenceHeader: "the evidence header was already in the message",
+  restampReasonManifestAttached: "the manifest was already attached",
+  restampsSummary:
+    "A send pass re-ran $1 time(s) without stamping again. Last: $2 — $3.",
   save: "Save",
   saved: "Saved.",
   exported: "Exported settings.default.json",
@@ -150,10 +200,23 @@ async function load() {
   FIELDS.organization.value = config.organization;
   FIELDS.caseId.value = config.caseId;
   FIELDS.pgpFingerprint.value = config.pgpFingerprint;
+  FIELDS.pgpSigner.value = config.pgpSigner;
+  FIELDS.pgpStandard.value = config.pgpStandard;
   FIELDS.enableOts.checked = Boolean(config.enableOts);
   FIELDS.enableReceipt.checked = Boolean(config.enableReceipt);
   FIELDS.enableDeliveryReceipt.checked = Boolean(config.enableDeliveryReceipt);
+  FIELDS.receiptMode.value = normalizeReceiptMode(config.receiptMode);
   FIELDS.receiptAddress.value = config.receiptAddress;
+  FIELDS.messageIdDomain.value = config.messageIdDomain;
+  FIELDS.manifestFilename.value = config.manifestFilename;
+  FIELDS.manifestFramework.value = config.manifestFramework;
+  FIELDS.manifestStandard.value = config.manifestStandard;
+  FIELDS.algoBody.value = config.algoBody;
+  FIELDS.algoExtra.value = config.algoExtra;
+  FIELDS.algoMerkle.value = config.algoMerkle;
+  FIELDS.algoEngine.value = config.algoEngine;
+  FIELDS.algoSignature.value = config.algoSignature;
+  FIELDS.algoTimestamp.value = config.algoTimestamp;
   await renderArmed();
 }
 
@@ -168,6 +231,14 @@ async function renderArmed() {
     psempLastSend: null,
     psempSendCount: 0,
     psempReceiptError: "",
+    // Written by background.js but never shown until now: the sender could not see
+    // that a header had been dropped, that the PGP claim was omitted, or that the
+    // send pass had re-run. Values are plain data — the wording lives in _locales.
+    psempRejectedHeaders: [],
+    psempFingerprintIssue: "",
+    psempFingerprintIssueAt: "",
+    psempRestamps: 0,
+    psempLastRestamp: null,
   });
   const armed = document.getElementById("armed");
   if (armed) {
@@ -238,6 +309,51 @@ async function renderArmed() {
   if (receiptProblem) {
     receiptProblem.textContent = health.psempReceiptError ? t("receiptError") : "";
   }
+
+  // A custom header the extension refused to write is dropped silently on the wire:
+  // the message still goes out, only without that header. The names are recorded, so
+  // this is where the sender learns which claim is missing.
+  const rejected = Array.isArray(health.psempRejectedHeaders) ? health.psempRejectedHeaders : [];
+  const rejectedNode = document.getElementById("rejectedHeaders");
+  if (rejectedNode) {
+    rejectedNode.textContent = rejected.length ? t("rejectedHeaders", rejected.join(", ")) : "";
+  }
+
+  // The PGP claim is omitted when the stored value cannot be a fingerprint. The
+  // stored value is a code ("not-hex", "key-id-not-fingerprint", "wrong-length"),
+  // mapped here to a sentence; an unknown code falls back to nothing rather than
+  // printing an internal identifier on the page.
+  const issueCodes = {
+    "not-hex": "fingerprintIssueNotHex",
+    "key-id-not-fingerprint": "fingerprintIssueKeyId",
+    "wrong-length": "fingerprintIssueWrongLength",
+  };
+  const issueNode = document.getElementById("fingerprintIssue");
+  if (issueNode) {
+    const key = issueCodes[health.psempFingerprintIssue];
+    const when = health.psempFingerprintIssueAt || "—";
+    issueNode.textContent = key ? t(key, when) : "";
+  }
+
+  // A second pass over an already stamped message does not stamp again; it is counted
+  // anyway, because "sent once, stamped once" is a claim the evidence chain makes.
+  const restamps = Number(health.psempRestamps) || 0;
+  const restampNode = document.getElementById("restamps");
+  if (restampNode) {
+    const last = health.psempLastRestamp;
+    if (restamps > 0) {
+      const reasonKeys = {
+        "evidence-header": "restampReasonEvidenceHeader",
+        "manifest-attached": "restampReasonManifestAttached",
+      };
+      const reasonKey = last && reasonKeys[last.reason];
+      const reason = reasonKey ? t(reasonKey) : (last && last.reason) || "—";
+      const when = (last && last.at) || "—";
+      restampNode.textContent = t("restampsSummary", [restamps, when, reason]);
+    } else {
+      restampNode.textContent = "";
+    }
+  }
 }
 
 async function save() {
@@ -260,16 +376,32 @@ async function save() {
     organization: FIELDS.organization.value.trim() || DEFAULTS.organization,
     caseId: FIELDS.caseId.value.trim(),
     pgpFingerprint: normalizeFingerprint(typedFingerprint),
+    pgpSigner: FIELDS.pgpSigner.value.trim() || DEFAULTS.pgpSigner,
+    pgpStandard: FIELDS.pgpStandard.value.trim() || DEFAULTS.pgpStandard,
     enableOts: FIELDS.enableOts.checked,
     enableReceipt: FIELDS.enableReceipt.checked,
     enableDeliveryReceipt: FIELDS.enableDeliveryReceipt.checked,
+    receiptMode: normalizeReceiptMode(FIELDS.receiptMode.value),
     receiptAddress: FIELDS.receiptAddress.value.trim(),
+    messageIdDomain: FIELDS.messageIdDomain.value.trim() || DEFAULTS.messageIdDomain,
+    manifestFilename: FIELDS.manifestFilename.value.trim() || DEFAULTS.manifestFilename,
+    manifestFramework: FIELDS.manifestFramework.value.trim() || DEFAULTS.manifestFramework,
+    manifestStandard: FIELDS.manifestStandard.value.trim() || DEFAULTS.manifestStandard,
+    algoBody: FIELDS.algoBody.value.trim() || DEFAULTS.algoBody,
+    algoExtra: FIELDS.algoExtra.value.trim(),
+    algoMerkle: FIELDS.algoMerkle.value.trim() || DEFAULTS.algoMerkle,
+    algoEngine: FIELDS.algoEngine.value.trim() || DEFAULTS.algoEngine,
+    algoSignature: FIELDS.algoSignature.value.trim() || DEFAULTS.algoSignature,
+    algoTimestamp: FIELDS.algoTimestamp.value.trim() || DEFAULTS.algoTimestamp,
     // A fingerprint just accepted clears the complaint background.js recorded for the
     // previous one, so the page stops reporting a defect the user has already fixed.
     psempFingerprintIssue: "",
   };
   await browser.storage.local.set(next);
   FIELDS.pgpFingerprint.value = next.pgpFingerprint;
+  FIELDS.pgpSigner.value = next.pgpSigner;
+  FIELDS.pgpStandard.value = next.pgpStandard;
+  FIELDS.receiptMode.value = next.receiptMode;
   FIELDS.receiptAddress.value = next.receiptAddress;
   setStatus(t("saved"));
 }
@@ -296,6 +428,12 @@ function normalizeSettings(raw) {
   // DEFAULTS block, but an imported settings file silently lost its value.
   if (source.caseId != null) next.caseId = String(source.caseId).trim();
   if (source.pgpFingerprint != null) next.pgpFingerprint = normalizeFingerprint(source.pgpFingerprint);
+  if (source.pgpSigner != null) {
+    next.pgpSigner = String(source.pgpSigner).trim() || DEFAULTS.pgpSigner;
+  }
+  if (source.pgpStandard != null) {
+    next.pgpStandard = String(source.pgpStandard).trim() || DEFAULTS.pgpStandard;
+  }
   if (source.enableOts != null) next.enableOts = source.enableOts === true || source.enableOts === "true";
   if (source.enableReceipt != null) {
     next.enableReceipt = source.enableReceipt === true || source.enableReceipt === "true";
@@ -304,7 +442,43 @@ function normalizeSettings(raw) {
     next.enableDeliveryReceipt =
       source.enableDeliveryReceipt === true || source.enableDeliveryReceipt === "true";
   }
+  // An imported file may name a mode this build does not know; keep the page usable
+  // by ignoring it instead of writing a value the background script cannot honour.
+  if (source.receiptMode != null) {
+    const mode = String(source.receiptMode).trim();
+    if (RECEIPT_MODES.indexOf(mode) !== -1) next.receiptMode = mode;
+  }
   if (source.receiptAddress != null) next.receiptAddress = String(source.receiptAddress).trim();
+  // An imported file may omit these or carry blanks; each one falls back to the shipped
+  // value so a half-filled settings file cannot blank out the evidence chain. `algoExtra`
+  // is deliberately allowed to become empty: it means "no extra hashes", which is a real
+  // choice, whereas an empty `algoBody` would name no digest at all.
+  if (source.messageIdDomain != null) {
+    next.messageIdDomain = String(source.messageIdDomain).trim() || DEFAULTS.messageIdDomain;
+  }
+  if (source.manifestFilename != null) {
+    next.manifestFilename = String(source.manifestFilename).trim() || DEFAULTS.manifestFilename;
+  }
+  if (source.manifestFramework != null) {
+    next.manifestFramework = String(source.manifestFramework).trim() || DEFAULTS.manifestFramework;
+  }
+  if (source.manifestStandard != null) {
+    next.manifestStandard = String(source.manifestStandard).trim() || DEFAULTS.manifestStandard;
+  }
+  if (source.algoBody != null) next.algoBody = String(source.algoBody).trim() || DEFAULTS.algoBody;
+  if (source.algoExtra != null) next.algoExtra = String(source.algoExtra).trim();
+  if (source.algoMerkle != null) {
+    next.algoMerkle = String(source.algoMerkle).trim() || DEFAULTS.algoMerkle;
+  }
+  if (source.algoEngine != null) {
+    next.algoEngine = String(source.algoEngine).trim() || DEFAULTS.algoEngine;
+  }
+  if (source.algoSignature != null) {
+    next.algoSignature = String(source.algoSignature).trim() || DEFAULTS.algoSignature;
+  }
+  if (source.algoTimestamp != null) {
+    next.algoTimestamp = String(source.algoTimestamp).trim() || DEFAULTS.algoTimestamp;
+  }
   return next;
 }
 
@@ -339,10 +513,23 @@ async function exportSettings() {
       organization: config.organization,
       caseId: config.caseId,
       pgpFingerprint: config.pgpFingerprint,
+      pgpSigner: config.pgpSigner,
+      pgpStandard: config.pgpStandard,
       enableOts: config.enableOts,
       enableReceipt: config.enableReceipt,
       enableDeliveryReceipt: config.enableDeliveryReceipt,
+      receiptMode: config.receiptMode,
       receiptAddress: config.receiptAddress,
+      messageIdDomain: config.messageIdDomain,
+      manifestFilename: config.manifestFilename,
+      manifestFramework: config.manifestFramework,
+      manifestStandard: config.manifestStandard,
+      algoBody: config.algoBody,
+      algoExtra: config.algoExtra,
+      algoMerkle: config.algoMerkle,
+      algoEngine: config.algoEngine,
+      algoSignature: config.algoSignature,
+      algoTimestamp: config.algoTimestamp,
     },
     null,
     2,
