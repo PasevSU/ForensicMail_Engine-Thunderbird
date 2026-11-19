@@ -5,7 +5,7 @@ This project has an unusually small surface area and an unusually strict one. Th
 `node tools/check-repo.cjs` is the whole gate. Run it before you open a pull request.
 
 ```bash
-node tools/check-repo.cjs         # or: npm run check     — 8 consistency checks
+node tools/check-repo.cjs         # or: npm run check     — 10 consistency checks
 node psemp-gateway/test/all.cjs   # or: npm run suites    — 13 test suites
 node psemp-gateway/cli.js self-test
 ```

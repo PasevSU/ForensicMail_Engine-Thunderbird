@@ -672,6 +672,113 @@ separates *requested* from *received*, and it treats `disposition: …; deleted`
 without `displayed` as "the client removed it", never as "a person read it". An
 absent receipt is not evidence of non-delivery, and it must never be presented as one.
 
+### A junk-marked message never gets a read receipt
+
+Thunderbird refuses to answer a read request for a message its own junk filter has
+marked, and it refuses **before** it even looks at the request. The gate is
+`msgHdrView.js:4396`, in `HandleMDNResponse`:
+
+```js
+// if the message is marked as junk, do NOT attempt to process a return receipt
+// in order to better protect the user
+if (!["", "0"].includes(gMessage.getStringProperty("junkscore"))) {
+  return;
+}
+```
+
+The early return happens above the `MDNReportSent` check, above the
+`Disposition-Notification-To` / `Return-Receipt-To` extraction and above the
+`nsIMsgMdnGenerator` call, so nothing downstream runs. **No preference and no
+add-on can override it**: the gate consults the message's `junkscore` string
+property, not any setting, and a MailExtension has no API that can answer an MDN
+on its behalf (`schemas/messages.json` carries no such method). This is a
+Thunderbird behaviour, not a defect in PSEMP — the request is on the wire and the
+evidence chain is intact; the client on the other side simply stays silent.
+
+What does change the outcome is the message's own state, not a pref:
+
+| Action | Effect on the gate |
+| --- | --- |
+| "Mark As Not Junk" on that message | `junkCommands.js` writes `junkscore = IS_HAM_SCORE` with origin `"user"` — the gate no longer fires |
+| The sender is on that account's whitelist | the same file writes the ham score with origin `"whitelist"` — same result |
+| The message is later re-classified as junk | the gate applies again, and the request is dropped again |
+
+So the remedy is per message, or per sender via the whitelist — not a setting. The
+installer therefore **reports** the junk configuration and writes nothing about
+detection:
+
+```
+junk      10 mailbox(es) route junk mail: server1, … server8
+          server1 (spamLevel unset->100) …
+          server3 (spamLevel 0) — detection off for that account
+```
+
+`mail.server.<name>.spamLevel` (`defaults/pref/mailnews.js:285`, default `100`,
+`0` = detection off) is the switch that decides whether the adaptive filter marks
+anything at all. Turning it off would stop the false positives *and* stop all
+junk filtering, so the script prints the value and leaves the decision to the
+operator. Two related pref names are deliberately **not** written:
+
+- `mail.spam.manualMark` and `mail.spam.manualMarkMode` are checked
+  (`mailnews.js:314`, `:316`) but they are **not** the classifier gate. Per
+  `msgHdrView.js:3826–3832` they only decide whether a message that is *already*
+  junk is reloaded in place or moved/deleted. Setting `manualMark` does not stop
+  anything from being classified as junk. The installer sets `manualMark` to
+  `true` with mode `0` (mark, do not move) so a false positive stays visible in
+  the Inbox instead of being moved to Junk where it is easy to miss.
+- `mail.server.<name>.useServerFilter` is **not written at all**. It means "trust
+  spam headers set by:" — it imports an *upstream* verdict and can only
+  **increase** junk tagging. It is also inert unless
+  `mail.server.<name>.serverFilterName` is set
+  (`modules/MsgIncomingServer.sys.mjs:1157` returns early, `:1162` returns again),
+  and no server in this profile sets it, so writing it was a no-op that looked
+  like a fix. The installer reports `serverFilterName` when present and writes
+  nothing.
+
+There is no `junk`-related preference in `defaults/pref/mdn.js` (read in full:
+`request_return_receipt_on`, `incorporate_return_receipt`, `mdn_report_enabled`,
+`mdn_not_in_to_cc`, `mdn_outside_domain`, `mdn_other`,
+`request_receipt_header_type`), and none in `greprefs.js`. Every spam lever lives
+in `mailnews.js`.
+
+### When the receipt leaves through a relay
+
+A read receipt is a normal message: it goes out through the account's own outgoing
+server, with that server's `From:` address. The installer prints the routing so a
+relay hop is visible instead of assumed (the values are read from
+`mail.smtpserver.<name>.hostname` and `.username`, which is where Thunderbird
+actually stores them — `mail.smtp.<name>.` is empty):
+
+```
+egress    read receipt leaves through the identity's outgoing server:
+            identity from-address                           smtp   host
+          id8   pasevdenislav@gmail.com           -> smtp1  smtp.gmail.com
+          id9   pasevdenislav@pasevsu-dev.com     -> smtp4  mail.pasevsu-dev.com
+```
+
+What the table **cannot** tell you is the envelope the relay actually sends. A
+relay that rewrites the envelope sender or `Return-Path` breaks SPF/DKIM/DMARC
+alignment for the receipt, and the receiving side may then discard it as
+unauthenticated — including the `Return-Path` rewrite that is normal for a
+third-party SMTP service. The symptom is the one this section exists for: the
+request is on the wire, the send looks clean, and no `message/disposition-notification`
+ever arrives. The three remedies, in order of strength:
+
+1. **Send from the relay's own domain** (`receiptMode: "custom"` with an address
+   the relay is authorised to sign for), so the receipt is aligned by
+   construction.
+2. **Have the relay sign with an aligned selector** (`smtp4` ⇒ DKIM on
+   `pasevsu-dev.com` matching the `d=` the relay uses), rather than relying on
+   rewriting.
+3. **Ask the recipient to accept the receipt separately**, treating a missing MDN
+   as unknown rather than as a failed delivery.
+
+`install.ps1` does not change SMTP servers, hostnames or `From:` addresses — the
+table is diagnostics, and an "obvious" heuristic (does the SMTP host end with the
+identity's domain?) is not evidence: `mail.pasevsu-dev.com` ends with
+`pasevsu-dev.com`, so such a test would have cleared the one identity that does go
+through the relay.
+
 ### German and Bulgarian
 
 The options page and its hints are localised through `_locales/`:
@@ -825,7 +932,7 @@ WAR marker is the only thing always added to the Subject, and it is a marker, no
 
 Thunderbird will not compose or display a custom header unless its name is listed
 in the `mail.compose.other.header` preference. [`user.js`](user.js) ships that
-preference with **all fourteen** names, in injection order:
+preference with **all twenty-seven** names, in injection order:
 
 1. Copy `thunderbird-extension/user.js` into your profile directory, e.g.
    `%APPDATA%\Thunderbird\Profiles\xxxxxxxx.default-esr\user.js`.

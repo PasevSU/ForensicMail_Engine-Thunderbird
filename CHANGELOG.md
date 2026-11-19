@@ -57,6 +57,32 @@ Two versions exist in the ecosystem and must not be confused:
   the three output strings byte for byte, including the blank-field fallback and a
   hostile value containing `\r\n`. Two engines that agreed only on their defaults
   would still hand a verifier a footer the other one never wrote.
+- **`install.ps1` now reports why a receipt may not come back, instead of pretending
+  to configure it.** Two new output blocks:
+  - `junk` lists the mailboxes that route junk mail and the
+    `mail.server.<name>.spamLevel` each one carries, because a message Thunderbird
+    has marked as junk never gets a read receipt: `msgHdrView.js:4396` returns
+    before the `Disposition-Notification-To` header is even read, and no preference
+    or add-on can override that. The only remedies are per message ("Mark As Not
+    Junk", which writes `IS_HAM_SCORE` with origin `"user"`) or per sender (the
+    account's whitelist), so the script reports the setting and leaves the decision
+    to the operator.
+  - `egress` prints each identity's outgoing server — read from
+    `mail.smtpserver.<name>.hostname` / `.username`, which is where Thunderbird
+    stores it — so a relay hop is visible. A relay that rewrites the envelope
+    sender or `Return-Path` breaks SPF/DKIM/DMARC alignment for the receipt and the
+    receiving side may discard it, which looks identical to "no one read it". The
+    block says what it cannot know and gives three ranked remedies.
+- The installer sets `mail.spam.manualMarkMode` to `0`, so a false positive stays
+  visible in the Inbox instead of being moved to Junk.
+- **`tools/check-repo.cjs` gained a tenth check**, so neither of the two defects
+  above can come back unnoticed. It pins that the three `mail.spam.*` prefs are
+  written through `Set-PrefLine`, that `useServerFilter` and `spamLevel` are
+  **not** written, that the egress table reads `mail.smtpserver.<name>.` and never
+  `mail.smtp.<name>.`, that the junk block still names `msgHdrView.js:4396`, and
+  that `thunderbird-extension/README.md` states the current header-name count.
+  Every one of those assertions describes a failure that was silent: the script
+  printed a reassuring line while the profile disagreed.
 
 ### Fixed
 
@@ -69,6 +95,55 @@ Two versions exist in the ecosystem and must not be confused:
 - `psemp-gateway/api.js`: the `loadSettings()` comment claimed "the same six
   keys" were mirrored in the extension. It is ten, and the comment no longer
   states a number that can rot.
+- **The installer's relay diagnostic had never printed a line.** It read the
+  outgoing server from `mail.smtp.<name>.hostname`; Thunderbird stores it under
+  `mail.smtpserver.<name>.hostname`, so the table stayed empty on every run and
+  the warning it was supposed to raise was silently absent. A diagnostic that
+  always agrees with the profile is worse than none.
+- **Two `install.ps1` comments asserted semantics the source contradicts.**
+  `mail.spam.manualMark` was presented as the switch that stops the spam filter
+  from marking messages; per `msgHdrView.js:3826–3832` it only decides whether a
+  message that is *already* junk is reloaded in place or moved/deleted, and the
+  real classifier switch is `mail.server.<name>.spamLevel`. The comment on
+  `mail.server.<name>.useServerFilter` claimed it suppressed junk marking, while
+  the pref means "trust spam headers set by:" and can only *increase* tagging.
+- **`psemp-gateway`'s sibling test `thunderbird-extension/tools/test-pref-rewrite.ps1`
+  had been failing two of its nine checks ever since the rewrite started working.**
+  Both assertions scanned the generated `user.js` for individually quoted
+  `"X-PasevSU-…"` strings, but a *successful* compression collapses the readable
+  array into one comma-separated value with a single pair of quotes around the
+  whole list. The checks therefore returned zero names precisely when the rewrite
+  was correct. They now read the names out of the pref value.
+- `thunderbird-extension/README.md` said `user.js` registers "all fourteen" header
+  names. It registers twenty-seven.
+- **`Set-PrefLine` could delete the pref next to the one it was asked to rewrite.**
+  Its value pattern ended in a greedy `[^\r\n]*\)`, so when two prefs shared a
+  line it ran past the first `);` and replaced both with a single line. The
+  condition is easy to reach: appending to a `user.js` that has no trailing
+  newline glues the new pref onto the last one. Reproduced, then fixed twice over
+  — the value match now refuses to cross a `user_pref(`, and any line holding two
+  prefs is split before the line-anchored rewrites run. This was found while
+  proving the `useServerFilter` retirement below: the glued leftover was being
+  deleted here, uncounted, so a retirement of ten lines reported nine.
+- **The first `useServerFilter` retirement under-reported what it removed**, for
+  the reason above. It now reports the true count — ten of ten in the
+  reproduction, twenty of twenty with the leftovers doubled.
+
+### Changed
+
+- `mail.server.<name>.useServerFilter` is **no longer written** by `install.ps1`.
+  It is inert unless the account also sets `serverFilterName`
+  (`modules/MsgIncomingServer.sys.mjs:1157` returns early, `:1162` returns again),
+  no server in the shipped profile sets it, and where it does take effect it can
+  only raise the junk score — the opposite of the intent. The value is now
+  reported when present.
+- The old relay heuristic (does the SMTP host end with the identity's domain?) is
+  replaced by the `egress` table. The heuristic could not have worked even after
+  the prefix fix: `mail.pasevsu-dev.com` ends with `pasevsu-dev.com`, so the one
+  identity that does relay through it was the one identity it cleared.
+- The installer still does not touch SMTP servers, `From:` addresses or
+  `spamLevel`. Deciding to turn spam detection off stays the operator's decision,
+  and the output says so.
 
 ---
 

@@ -196,6 +196,110 @@ check('the gateway declares no runtime dependencies', () => {
   return 'vendored packages only, nothing to install';
 });
 
+check('install.ps1 keeps the receipt reporting honest', () => {
+  /*
+   * Every assertion here pins a claim that was, at some point, false in shipped code,
+   * and each of those failures was SILENT: the script printed a reassuring line and
+   * the profile disagreed. A receipt that never arrives has two common causes and both
+   * of them live in this file:
+   *
+   *   1. the message was junk-marked, and Thunderbird never reads the request
+   *      (msgHdrView.js:4396). No pref changes that, so the script must report the
+   *      junk configuration rather than pretend a setting fixes it.
+   *   2. the receipt left through a relay that rewrites the envelope. The first
+   *      version of that diagnostic read `mail.smtp.<name>.hostname`, a prefix
+   *      Thunderbird does not use, so the table was always empty and the warning
+   *      never printed once.
+   */
+  const source = fs.readFileSync(path.join(EXT, 'tools', 'install.ps1'), 'utf8');
+
+  // (a) The spam block is written through Set-PrefLine, which keeps the last-occurrence
+  // dedupe meaningful. A raw string append would grow user.js on every run.
+  for (const key of ['mail.spam.manualMark', 'mail.spam.manualMarkMode', 'mail.spam.logging.enabled']) {
+    assert(
+      source.includes(`Set-PrefLine $text '${key}'`),
+      `${key} is no longer written through Set-PrefLine`
+    );
+  }
+
+  // (b) `useServerFilter` is NOT written. It imports an upstream verdict, is inert
+  // without `serverFilterName` (MsgIncomingServer.sys.mjs:1162), and can only raise
+  // the junk score. Writing it looked like a fix and was a no-op.
+  assert(
+    !/Set-PrefLine[^\n]*useServerFilter/.test(source),
+    'install.ps1 writes mail.server.<name>.useServerFilter again'
+  );
+
+  // (b2) ...but not writing it is not enough. The script edits user.js in place, so the
+  // lines an EARLIER version wrote are still there: on the machine this was found on,
+  // 10 override lines survived while prefs.js held the pref for only 2 servers. The
+  // script therefore has to retire its own leftover output, and say how many lines it
+  // removed. A silent cleanup would be the same lie in a quieter voice.
+  assert(
+    /staleFilterPattern[^\n]*useServerFilter/.test(source) ||
+      /useServerFilter[\s\S]{0,200}staleFilterPattern/.test(source),
+    'install.ps1 no longer retires the useServerFilter lines an earlier version wrote into user.js'
+  );
+  assert(
+    /staleFilterCount/.test(source) && /leftover\s/.test(source),
+    'install.ps1 retires leftover useServerFilter lines without reporting the count'
+  );
+
+  // (b3) ...and the count has to be true. The first version of the retirement missed one
+  // line out of ten: a pref rewritten earlier in the script had its value pattern run
+  // past `);` into a glued following pref and delete it silently, so the leftover was
+  // already gone by the time the retirement counted what it had removed. Two guards:
+  // `Set-PrefLine` must not be able to cross into a second pref, and lines that hold two
+  // prefs must be split before any line-anchored pattern sees them.
+  assert(
+    /\(\?:\(\?!user_pref\)/.test(source),
+    'Set-PrefLine can match across a `);` into a following pref and delete it'
+  );
+  assert(
+    source.includes("'user_pref\\(')") &&
+      source.indexOf("'user_pref\\(')") < source.indexOf('function Set-PrefLine'),
+    'install.ps1 no longer splits a line that holds two prefs before rewriting prefs'
+  );
+
+  // (c) `spamLevel` is reported, never decided. Turning the operator's spam filter off
+  // is their call, not the installer's.
+  assert(
+    !/Set-PrefLine[^\n]*spamLevel/.test(source),
+    'install.ps1 writes spamLevel, which would silently disable junk detection'
+  );
+
+  // (d) The outgoing server is read from `mail.smtpserver.<name>.` — the real prefix.
+  assert(
+    source.includes('mail\\.smtpserver\\.'),
+    'the SMTP hostname is no longer read from mail.smtpserver.<name>., the egress table will be empty'
+  );
+  assert(
+    !source.includes('mail\\.smtp\\.'),
+    'install.ps1 reads mail.smtp.<name>., which Thunderbird never writes'
+  );
+
+  // (e) The junk gate cannot be overridden, and the file must not imply otherwise.
+  assert(
+    source.includes('msgHdrView.js:4396'),
+    'the junk block no longer names the gate it cannot override (msgHdrView.js:4396)'
+  );
+
+  // (f) The document that tells a reader how many names to expect must agree with
+  // HEADER_NAMES. This is the one place a count belongs, because the compiler of
+  // names (user.js) and the prose sit one file apart.
+  const readme = fs.readFileSync(path.join(EXT, 'README.md'), 'utf8');
+  assert(
+    readme.includes('all twenty-seven'),
+    'thunderbird-extension/README.md does not state the current header-name count'
+  );
+  assert(
+    !/all fourteen/.test(readme),
+    'thunderbird-extension/README.md carries the stale "fourteen" header-name count'
+  );
+
+  return 'junk reported, egress read from mail.smtpserver., no silent pref writes';
+});
+
 let failed = 0;
 for (const r of results) {
   if (r.ok) {

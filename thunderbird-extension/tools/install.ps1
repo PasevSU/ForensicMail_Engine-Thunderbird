@@ -181,6 +181,7 @@ $serverNames = @()
 $junkTargets = @()
 $smtpOf = @{}
 $smtpHost = @{}
+$smtpUser = @{}
 $identityEmail = @{}
 if (Test-Path $prefsJs) {
   $prefsText = [IO.File]::ReadAllText($prefsJs)
@@ -203,9 +204,16 @@ if (Test-Path $prefsJs) {
   foreach ($match in [regex]::Matches(
     $prefsText, 'user_pref\("mail\.identity\.(id\d+)\.useremail",\s*"([^"]+)"'
   )) { $identityEmail[$match.Groups[1].Value] = $match.Groups[2].Value }
+  # The outgoing server lives under mail.smtpserver.<name>., NOT mail.smtp.<name>.
+  # Reading the wrong root left this table empty on every run, so the egress
+  # report below skipped every identity and never printed a line — a diagnostic
+  # that silently agreed with whatever the profile did.
   foreach ($match in [regex]::Matches(
-    $prefsText, 'user_pref\("mail\.smtp\.(smtp\d+)\.hostname",\s*"([^"]+)"'
+    $prefsText, 'user_pref\("mail\.smtpserver\.(smtp\d+)\.hostname",\s*"([^"]+)"'
   )) { $smtpHost[$match.Groups[1].Value] = $match.Groups[2].Value }
+  foreach ($match in [regex]::Matches(
+    $prefsText, 'user_pref\("mail\.smtpserver\.(smtp\d+)\.username",\s*"([^"]+)"'
+  )) { $smtpUser[$match.Groups[1].Value] = $match.Groups[2].Value }
 }
 if ($identityIds.Count -eq 0) {
   Write-Host 'no identity found in prefs.js — receipt prefs are left untouched' -ForegroundColor Yellow
@@ -225,8 +233,22 @@ if ($hadUserJs) {
 # `extensions.autoDisableScopes` lines, the first still 15.
 $text = ($text -replace "`r`n", "`n") -replace "`r", "`n"
 
+# Two prefs on one line are invisible to every line-anchored pattern below. A file
+# whose last line has no trailing newline is exactly how that happens: the next append
+# glues onto it. Observed 2026-11-17 — a glued `useServerFilter` line was swallowed by
+# Set-PrefLine's value match instead of being counted, so a retirement that removed 10
+# lines reported 9. Split them apart rather than trusting the file's shape.
+$text = ($text -split "`n" | ForEach-Object {
+  if ([regex]::Matches($_, 'user_pref\(').Count -gt 1) {
+    [regex]::Replace($_, ';(?=[ \t]*user_pref\()', ";`n")
+  } else { $_ }
+}) -join "`n"
+
 function Set-PrefLine([string]$body, [string]$key, [string]$line) {
-  $pattern = '(?m)^[ \t]*user_pref\("' + [regex]::Escape($key) + '",[^\r\n]*\);[ \t]*$'
+  # The value must not be allowed to run past `);` into a following pref: `[^\r\n]*`
+  # is greedy and would rewrite two preferences as one.
+  $pattern = '(?m)^[ \t]*user_pref\("' + [regex]::Escape($key) +
+    '",(?:(?!user_pref)[^\r\n])*\);[ \t]*$'
   if ([regex]::IsMatch($body, $pattern)) { return [regex]::Replace($body, $pattern, $line) }
   return $body.TrimEnd() + "`n" + $line
 }
@@ -307,17 +329,38 @@ $text = Set-PrefLine $text 'mail.mdn.report.enabled' 'user_pref("mail.mdn.report
 foreach ($policy in @('not_in_to_cc', 'outside_domain', 'other')) {
   $text = Set-PrefLine $text "mail.mdn.report.$policy" ('user_pref("mail.mdn.report.{0}", 1);' -f $policy)
 }
-# Mail that carries the junk flag is never offered for a read receipt:
-# Thunderbird skips the MDN bar for isJunk messages, and a MailExtension cannot
-# reach that code path. The profile-side answer — and the only one that survives
-# an application update — is to stop the local classifier from disqualifying a
-# correspondent behind the operator's back. manualMark means a header is tagged
-# junk only when a filter or the operator asks for it, so an ordinary sender is
-# never silently excluded from the receipt loop. Logging is kept on so that when a
-# receipt IS suppressed, junklog.html shows whether a junk mark caused it.
+# READ RECEIPTS ARE SWITCHED OFF FOR JUNK-MARKED MAIL, AND NOTHING HERE CAN
+# SWITCH THEM BACK ON. The gate is hard-coded in the application:
+# msgHdrView.js HandleMDNResponse (4391) returns before it even reads
+# Disposition-Notification-To when the message carries a junkscore (4396-4400).
+# It runs before the MDNReportSent check and before the nsIMsgMdnGenerator call,
+# so the request is not refused — it is never seen. No pref listed in
+# defaults/pref/mdn.js governs that branch, and no MailExtension API can generate
+# an MDN (schemas/messages.json has no such method; ExtensionMessages.sys.mjs only
+# derives the junk boolean). Two defences remain, and this block only sets up the
+# first one honestly:
+#
+#   1. Do not let the adaptive classifier junk a correspondent silently. The
+#      switch that decides whether a mailbox is filtered at all is
+#      mail.server.<name>.spamLevel (mailnews.js:285, default 100; 0 turns
+#      detection off). That is the operator's mail security, so it is READ and
+#      reported below, never overwritten.
+#   2. When a message is junk anyway, "Mark As Not Junk" rewrites junkscore to
+#      IS_HAM_SCORE with origin "user" (junkCommands.js analyzeMessage), which
+#      makes the gate pass again for that message. A pre-existing junk mark still
+#      suppresses the receipt until it is cleared.
+#
+# mail.spam.manualMark is NOT a classifier switch. It only decides what happens
+# to a message that is already junk — reload the header pane, or move/delete it
+# (msgHdrView.js:3825-3832, bound to "When messages are marked as spam:" in
+# preferences.xhtml:2165). manualMarkMode 0 pairs with it explicitly (move to the
+# Spam folder) instead of relying on the default, so "marked as spam" has one
+# meaning on every machine this profile is copied to.
 $text = Set-PrefLine $text 'mail.spam.manualMark' 'user_pref("mail.spam.manualMark", true);'
+$text = Set-PrefLine $text 'mail.spam.manualMarkMode' 'user_pref("mail.spam.manualMarkMode", 0);'
 $text = Set-PrefLine $text 'mail.spam.logging.enabled' 'user_pref("mail.spam.logging.enabled", true);'
 $junkAligned = @()
+$junkWatched = @()
 foreach ($serverName in $serverNames) {
   $text = Set-PrefLine $text "mail.server.$serverName.mdn_report_enabled" `
     ('user_pref("mail.server.{0}.mdn_report_enabled", true);' -f $serverName)
@@ -329,18 +372,68 @@ foreach ($serverName in $serverNames) {
     $text = Set-PrefLine $text "mail.server.$serverName.mdn_$policy" `
       ('user_pref("mail.server.{0}.mdn_{1}", 1);' -f $serverName, $policy)
   }
-  # The junk filter belongs to the server, and this switch decides whether that
-  # account is filtered at all. It was set on the two accounts that were
-  # configured by hand and absent on the other eight, so the same message could be
-  # junk-tagged — and lose its receipt — on one mailbox and not on another. It is
-  # written for every server that has a junk destination in THIS profile; the list
-  # comes from prefs.js, so a newly added account is covered without editing here.
+  # NOTHING IS WRITTEN FOR useServerFilter. An earlier version of this script set
+  # it to true on every mailbox that routes junk, on the assumption that it turns
+  # the per-account filter on. It does the opposite of help: useServerFilter means
+  # "Trust spam headers set by:" — it imports an UPSTREAM verdict (SpamAssassin
+  # and friends) and feeds it to the classifier, so it can only add junk marks,
+  # never remove them. It is also inert unless serverFilterName is set
+  # (MsgIncomingServer.sys.mjs:1157 returns early, and :1162 returns again without
+  # a filter name), which is why the write looked harmless. Setting it on a mailbox
+  # whose provider already adds an X-Spam header is a way to lose receipts, so it
+  # is left exactly as the operator configured it.
+  #
+  # What IS done: spamLevel is read, so the run can say which mailbox can junk a
+  # message at all. It is never written — turning detection off is a security
+  # decision that belongs to the person reading the mail.
   if ($junkTargets -contains $serverName) {
-    $text = Set-PrefLine $text "mail.server.$serverName.useServerFilter" `
-      ('user_pref("mail.server.{0}.useServerFilter", true);' -f $serverName)
+    $level = ''
+    $levelMatch = [regex]::Match(
+      $prefsText, 'user_pref\("mail\.server\.' + [regex]::Escape($serverName) + '\.spamLevel",\s*(\d+)'
+    )
+    if ($levelMatch.Success) { $level = $levelMatch.Groups[1].Value }
+    $filterName = ''
+    $filterMatch = [regex]::Match(
+      $prefsText, 'user_pref\("mail\.server\.' + [regex]::Escape($serverName) + '\.serverFilterName",\s*"([^"]*)"'
+    )
+    if ($filterMatch.Success) { $filterName = $filterMatch.Groups[1].Value }
     $junkAligned += $serverName
+    $junkWatched += ('{0} (spamLevel {1}{2})' -f $serverName, $(if ($level) { $level } else { 'unset->100' }), $(if ($filterName) { ', trusts headers from ' + $filterName } else { '' }))
   }
 }
+
+# Not writing a pref is not the same as not having written it. Earlier versions of
+# this script DID write mail.server.<name>.useServerFilter = true for every mailbox
+# that routes junk, and those lines are still sitting in user.js on any profile this
+# script has ever touched: user.js is edited in place, so a removed statement leaves
+# its old output behind. On this machine that was 10 override lines, while the
+# operator's own prefs.js carried the pref for 2 servers — the installer had silently
+# widened their configuration and then reported "left exactly as configured".
+#
+# The lines live in user.js, which this script owns, so they are removed here and the
+# count is printed. Removing them restores whatever prefs.js already says, which is
+# the operator's real setting. This is a retirement, not a preference change, and it
+# is reported for the same reason: a silent cleanup is just a quieter lie.
+$staleFilterPattern = '(?m)^[ \t]*user_pref\("mail\.server\.[^"]+\.useServerFilter",'
+$staleFilterCount = 0
+# Work line by line: a whole-text regex has to consume the surrounding newlines to
+# stay tidy, and that leaves the last line of the file glued to the previous one.
+# Splitting is boring and provably preserves every other line.
+$keptLines = New-Object System.Collections.Generic.List[string]
+foreach ($line in ($text -split "`n")) {
+  if ($line -match $staleFilterPattern) { $staleFilterCount++; continue }
+  # A file that ends without a trailing newline can end up with a leftover line
+  # appended onto the final pref. That case still counts and is stripped in place,
+  # because dropping the line would delete the real preference in front of it.
+  $stripped = [regex]::Replace(
+    $line,
+    '(?<=;)[ \t]*user_pref\("mail\.server\.[^"]+\.useServerFilter",[^\r\n]*\);[ \t]*$',
+    ''
+  )
+  if ($stripped -ne $line) { $staleFilterCount++; $line = $stripped }
+  $keptLines.Add($line)
+}
+if ($staleFilterCount -gt 0) { $text = ($keptLines -join "`n") }
 
 # A duplicate key is not harmless: user.js is applied in file order and the LAST
 # assignment wins, so a stale `autoDisableScopes = 15` earlier in the file would
@@ -368,39 +461,63 @@ if ($identityIds.Count -gt 0) {
   Write-Host ('prefs     receipts requested for {0} identity(ies), {1} server(s) answer MDNs' -f $identityIds.Count, $serverNames.Count)
 }
 if ($junkAligned.Count -gt 0) {
-  Write-Host ('junk      one filter setting for every mailbox: {0}' -f ($junkAligned -join ', '))
+  Write-Host ('junk      {0} mailbox(es) route junk mail: {1}' -f $junkAligned.Count, ($junkAligned -join ', '))
+  foreach ($entry in $junkWatched) { Write-Host ('          ' + $entry) }
+  Write-Host '          A junk-marked message never gets a read receipt: msgHdrView.js:4396 returns' -ForegroundColor DarkGray
+  Write-Host '          before the request is read, and no pref or add-on can override it. Clear a mark' -ForegroundColor DarkGray
+  Write-Host '          with "Mark As Not Junk" (junkCommands.js sets IS_HAM_SCORE, origin "user").' -ForegroundColor DarkGray
+  Write-Host '          spamLevel is reported only — turning detection off stays your decision.' -ForegroundColor DarkGray
+}
+if ($staleFilterCount -gt 0) {
+  Write-Host ('leftover  {0} useServerFilter line(s) removed from user.js: an earlier version' -f $staleFilterCount)
+  Write-Host '          wrote them, and editing the file in place leaves their output behind even'
+  Write-Host '          though the statement is gone. prefs.js keeps your real values, so nothing'
+  Write-Host '          you set yourself was touched — only the override this script had added.'
 }
 
-# Delivery receipts leave through the identity's SMTP server, and a relay that
-# rewrites the envelope (a hosted relay such as Brevo does) breaks the address the
-# recipient's server answers to — the MDN goes nowhere and the send looks clean.
-# The extension cannot see the envelope, so the only honest thing to do is read
-# which identity uses which host and say so, instead of promising receipts that a
-# relay will swallow.
-$relayed = @()
-foreach ($identityId in $smtpOf.Keys) {
+# A receipt is dispatched through the identity's outgoing server, and the address
+# the recipient's mail system answers to is the ENVELOPE sender, not the From:
+# header. A hosted relay such as Brevo rewrites that envelope (Return-Path /
+# SMTP MAIL FROM) to its own bounce domain. SPF and DMARC are then evaluated
+# against a domain that did not sign or authorise the message for THIS sender, so
+# the answer is dropped upstream — and because the original send succeeded, the
+# send looks clean. The extension cannot see the envelope at all, so the honest
+# thing to do is show the routing and name the limitation.
+#
+# A previous version of this block only compared the SMTP hostname against the
+# identity's domain and warned when they differed. Even with the pref name fixed
+# that test cannot find the interesting case: an identity whose SMTP hostname
+# ends in its own domain (mail.<domain>) passes the comparison while the relay
+# behind it still rewrites the envelope. So the comparison is gone; the full
+# table is printed instead and the operator can see who sends through what.
+$egress = @()
+foreach ($identityId in ($smtpOf.Keys | Sort-Object)) {
   $smtpName = $smtpOf[$identityId]
   $smtpServerName = ''
   if ($smtpHost.ContainsKey($smtpName)) { $smtpServerName = $smtpHost[$smtpName] }
   $address = ''
   if ($identityEmail.ContainsKey($identityId)) { $address = $identityEmail[$identityId] }
-  # An identity is "relayed" when it sends through a host outside its own domain.
-  # Both sides of that comparison come from prefs.js: no hostname is written into
-  # this script, so the warning follows whatever the profile actually does.
-  if (-not $smtpServerName) { continue }
-  $domain = ''
-  if ($address -match '@([^@]+)$') { $domain = $matches[1] }
-  if (-not $domain) { continue }
-  if ($smtpServerName -notlike ('*' + $domain)) {
-    $relayed += ('{0} ({1}) -> {2} ({3})' -f $identityId, $address, $smtpName, $smtpServerName)
-  }
+  $user = ''
+  if ($smtpUser.ContainsKey($smtpName)) { $user = $smtpUser[$smtpName] }
+  if (-not $smtpServerName) { $smtpServerName = '(hostname not set)' }
+  $egress += ('{0,-5} {1,-38} -> {2,-6} {3}{4}' -f $identityId, $address, $smtpName, $smtpServerName, $(if ($user -and $user -ne $address) { ' [auth ' + $user + ']' } else { '' }))
 }
-if ($relayed.Count -gt 0) {
+if ($egress.Count -gt 0) {
   Write-Host ''
-  Write-Host 'Relay warning: these identities send through a host outside their own domain.' -ForegroundColor Yellow
-  foreach ($line in $relayed) { Write-Host ('  ' + $line) -ForegroundColor Yellow }
-  Write-Host '  A relay that rewrites the envelope can lose the read/delivery receipt. Use an' -ForegroundColor Yellow
-  Write-Host '  identity that sends through its own domain for mail that must come back with one.' -ForegroundColor Yellow
+  Write-Host 'egress    read receipt leaves through the identity''s outgoing server:'
+  Write-Host '            identity from-address                           smtp   host'
+  foreach ($line in $egress) { Write-Host ('          ' + $line) }
+  Write-Host ''
+  Write-Host '          What this cannot tell you: the envelope the relay actually sends.' -ForegroundColor DarkGray
+  Write-Host '          A relay that rewrites Return-Path breaks SPF/DKIM/DMARC alignment, so the' -ForegroundColor DarkGray
+  Write-Host '          recipient drops the receipt and the original send still looks clean.' -ForegroundColor DarkGray
+  Write-Host '          Fixes, in order of preference:' -ForegroundColor DarkGray
+  Write-Host '            1. Send mail that must produce a receipt from an identity whose server is' -ForegroundColor DarkGray
+  Write-Host '               authoritative for its From domain (its own MX/provider, not a relay).' -ForegroundColor DarkGray
+  Write-Host '            2. Keep the relay but make it DMARC-aligned: SPF include for the relay,' -ForegroundColor DarkGray
+  Write-Host '               DKIM signed by the relay, relaxed alignment, own domain in From.' -ForegroundColor DarkGray
+  Write-Host '            3. Accept that receipts from that identity are advisory only.' -ForegroundColor DarkGray
+  Write-Host '          This script does not change your SMTP or From settings.' -ForegroundColor DarkGray
 }
 
 Write-Host ''

@@ -110,7 +110,16 @@ Check 'autoDisableScopes is 0' ($written.Contains('user_pref("extensions.autoDis
 Check 'no array literal survives' (-not $written.Contains('.join(",")')) 'the multi-line form is still in the file'
 
 # The order matters: settings-parity.cjs compares this list to HEADER_NAMES.
-$after = @([regex]::Matches($written, '"(X-PasevSU-[A-Za-z0-9-]+)"') | ForEach-Object { $_.Groups[1].Value })
+# Read the names out of the VALUE, not by scanning for individually quoted
+# strings. The rewrite deliberately collapses the readable multi-line array into
+# the single comma-separated value Thunderbird expects, so after the edit there
+# is exactly one pair of quotes around the whole list. A scan for
+# `"X-PasevSU-..."` therefore finds zero names once the rewrite succeeds — the
+# check used to fail precisely because the rewrite had worked.
+$composeValue = [regex]::Match(
+  $written, '(?m)^[ \t]*user_pref\("mail\.compose\.other\.header",\s*"([^"]*)"'
+).Groups[1].Value
+$after = @($composeValue -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 Check 'all 27 header names still listed' ($after.Count -eq 27) "found $($after.Count)"
 Check 'header names keep their order' (($after -join ',') -eq ($names -join ',')) 'the injected order changed'
 
